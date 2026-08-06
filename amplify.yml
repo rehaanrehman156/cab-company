@@ -5,7 +5,7 @@ frontend:
       commands:
         - echo "Installing frontend dependencies..."
         - cd frontend/customer-app
-        - npm ci
+        - npm install
     build:
       commands:
         - npm run build
