@@ -1,0 +1,17 @@
+{
+  "dev": {
+    "bucketName": "cab-company-dev-frontend-site-328064416060",
+    "profile": "default",
+    "region": "ap-south-1"
+  },
+  "staging": {
+    "bucketName": "cab-company-staging-frontend-site",
+    "profile": "default",
+    "region": "ap-south-1"
+  },
+  "prod": {
+    "bucketName": "cab-company-prod-frontend-site",
+    "profile": "default",
+    "region": "ap-south-1"
+  }
+}

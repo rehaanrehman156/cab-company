@@ -1,0 +1,15 @@
+{
+  "aws_account_id": "328064416060",
+  "cluster_name": "cab-company-eks-auto",
+  "cluster_arn": "arn:aws:eks:ap-south-1:328064416060:cluster/cab-company-eks-auto",
+  "cluster_endpoint": "https://C855E36933817740D892DF40D75F834D.sk1.ap-south-1.eks.amazonaws.com",
+  "cluster_role_arn": "arn:aws:iam::328064416060:role/cab-company-dev-eks-cluster-role",
+  "node_role_arn": "arn:aws:iam::328064416060:role/cab-company-dev-eks-node-role",
+  "backend_ecr_repository_url": "328064416060.dkr.ecr.ap-south-1.amazonaws.com/cab-company-dev-backend",
+  "frontend_ecr_repository_url": "328064416060.dkr.ecr.ap-south-1.amazonaws.com/cab-company-dev-frontend",
+  "selected_subnet_ids": [
+    "subnet-0cfbcd34f564a12a5",
+    "subnet-02e813449d81c9d0a",
+    "subnet-045498ed106fc8499"
+  ]
+}

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cab-frontend
+  namespace: cab-company
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-subnets: subnet-02e813449d81c9d0a,subnet-045498ed106fc8499,subnet-0cfbcd34f564a12a5
+spec:
+  selector:
+    app: cab-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+  type: LoadBalancer

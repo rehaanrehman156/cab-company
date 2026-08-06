@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cab-backend
+  namespace: cab-company
+  labels:
+    app: cab-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cab-backend
+  template:
+    metadata:
+      labels:
+        app: cab-backend
+    spec:
+      serviceAccountName: cab-backend-sa
+      containers:
+        - name: cab-backend
+          image: 328064416060.dkr.ecr.ap-south-1.amazonaws.com/cab-company-dev-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "5000"
+            - name: AWS_REGION
+              value: "ap-south-1"
+            - name: APP_SECRETS_MANAGER_SECRET_ID
+              value: "cab-company/dev/backend"
+            - name: REQUIRE_RUNTIME_SECRETS
+              value: "false"
+          readinessProbe:
+            tcpSocket:
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5000
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
