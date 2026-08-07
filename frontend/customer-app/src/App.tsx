@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import './App.css';
 import { bookRide } from './Services/rides';
+import { formatLocationLabel } from './Utils/location';
 
 type RideType = 'mini' | 'sedan' | 'suv';
 
@@ -27,13 +28,30 @@ function App() {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const nextPickup = `Current location (${position.coords.latitude.toFixed(3)}, ${position.coords.longitude.toFixed(3)})`;
+        const { latitude, longitude } = position.coords;
+        const nextPickup = formatLocationLabel(latitude, longitude);
+
         setPickup(nextPickup);
         setFare(calculateFare(rideType, nextPickup));
         setMessage('Pickup location detected successfully.');
       },
       (error) => {
-        setMessage(`Location lookup failed: ${error.message}`);
+        let description = 'Unable to access your location right now.';
+
+        if (error.code === 1) {
+          description = 'Location access was denied. Please allow location access or enter your pickup manually.';
+        } else if (error.code === 2) {
+          description = 'Location information is unavailable. Please try again or enter your pickup manually.';
+        } else if (error.code === 3) {
+          description = 'Location lookup timed out. Please try again or enter your pickup manually.';
+        }
+
+        setMessage(description);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
       }
     );
   };
