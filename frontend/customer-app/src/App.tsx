@@ -11,6 +11,8 @@ function App() {
   const [rideType, setRideType] = useState<RideType>('mini');
   const [fare, setFare] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [searchingPlace, setSearchingPlace] = useState(false);
+  const [placeQuery, setPlaceQuery] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [ride, setRide] = useState<{ rideId: string; pickup: string; dropoff: string; fare: number; status: string } | null>(null);
 
@@ -27,13 +29,28 @@ function App() {
     }
 
     navigator.geolocation.getCurrentPosition(
-      (position) => {
+      async (position) => {
         const { latitude, longitude } = position.coords;
         const nextPickup = formatLocationLabel(latitude, longitude);
 
         setPickup(nextPickup);
         setFare(calculateFare(rideType, nextPickup));
-        setMessage('Pickup location detected successfully.');
+        setMessage('Resolving your current area and place...');
+
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
+          const data = await response.json();
+          const resolvedLabel = formatLocationLabel(latitude, longitude, data);
+
+          setPickup(resolvedLabel);
+          setFare(calculateFare(rideType, resolvedLabel));
+          setMessage('Pickup location detected successfully.');
+        } catch (error) {
+          console.warn('Reverse geocoding failed, using coordinates instead.', error);
+          setPickup(nextPickup);
+          setFare(calculateFare(rideType, nextPickup));
+          setMessage('Pickup location detected successfully.');
+        }
       },
       (error) => {
         let description = 'Unable to access your location right now.';
@@ -54,6 +71,40 @@ function App() {
         maximumAge: 0
       }
     );
+  };
+
+  const handleSearchPlace = async () => {
+    const trimmedQuery = placeQuery.trim();
+
+    if (!trimmedQuery) {
+      setMessage('Please enter a place name or landmark to search.');
+      return;
+    }
+
+    setSearchingPlace(true);
+    setMessage('Searching for that place...');
+
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q=${encodeURIComponent(trimmedQuery)}`);
+      const data = await response.json();
+
+      if (!Array.isArray(data) || data.length === 0) {
+        setMessage('No matching place found. Try a different name.');
+        return;
+      }
+
+      const firstMatch = data[0];
+      const resolvedLabel = formatLocationLabel(Number(firstMatch.lat), Number(firstMatch.lon), firstMatch);
+
+      setPickup(resolvedLabel);
+      setFare(calculateFare(rideType, resolvedLabel));
+      setMessage('Pickup location updated from place search.');
+    } catch (error) {
+      console.warn('Place search failed.', error);
+      setMessage('Unable to search that place right now. Please try again.');
+    } finally {
+      setSearchingPlace(false);
+    }
   };
 
   const handleCheckFare = (event: React.FormEvent) => {
@@ -148,6 +199,24 @@ function App() {
             <form className="booking-form" onSubmit={handleBookRide}>
               <label htmlFor="pickup">Pickup</label>
               <input id="pickup" type="text" value={pickup} onChange={(event) => setPickup(event.target.value)} placeholder="Connaught Place" />
+
+              <div className="button-stack">
+                <input
+                  type="text"
+                  value={placeQuery}
+                  onChange={(event) => setPlaceQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleSearchPlace();
+                    }
+                  }}
+                  placeholder="Search area or landmark"
+                />
+                <button type="button" className="btn btn-ghost full-width" onClick={() => void handleSearchPlace()} disabled={searchingPlace}>
+                  {searchingPlace ? 'Searching...' : 'Search place'}
+                </button>
+              </div>
 
               <button type="button" className="btn btn-ghost" onClick={handleUseLocation}>Use my location</button>
 
