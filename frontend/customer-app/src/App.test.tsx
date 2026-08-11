@@ -12,10 +12,28 @@ test('renders the booking experience', () => {
 
 test('formats a readable pickup label from reverse geocoding data', () => {
   const label = formatLocationLabel(28.6139, 77.2090, {
-    display_name: '12, Connaught Place, New Delhi, Delhi, India'
+    display_name: '12, Connaught Place, New Delhi, Delhi, India',
+    address: {
+      road: 'Connaught Place',
+      city: 'New Delhi',
+      state: 'Delhi'
+    }
   });
 
-  expect(label).toBe('12, Connaught Place, New Delhi');
+  expect(label).toBe('Connaught Place, New Delhi');
+});
+
+test('keeps a clear area and place label for a local landmark', () => {
+  const label = formatLocationLabel(12.9716, 77.5946, {
+    display_name: 'MG Road, Bengaluru, Karnataka, India',
+    address: {
+      road: 'MG Road',
+      city: 'Bengaluru',
+      state: 'Karnataka'
+    }
+  });
+
+  expect(label).toBe('MG Road, Bengaluru');
 });
 
 test('falls back to coordinate formatting when no address is available', () => {

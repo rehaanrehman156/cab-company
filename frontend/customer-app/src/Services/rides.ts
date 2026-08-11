@@ -8,3 +8,6 @@ export const getRideHistory = () =>
 
 export const getRideStatus = (rideId: string) =>
   api.get(`/rides/status/${rideId}`);
+
+export const updateRideStatus = (rideId: string, status: string) =>
+  api.patch(`/rides/status/${rideId}`, { status });

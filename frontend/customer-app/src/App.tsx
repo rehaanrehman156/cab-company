@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import './App.css';
-import { bookRide } from './Services/rides';
+import { bookRide, getRideStatus, updateRideStatus } from './Services/rides';
 import { formatLocationLabel } from './Utils/location';
+import { getRideProgressSteps, getRideStatusLabel } from './Utils/rideProgress';
 
 type RideType = 'mini' | 'sedan' | 'suv';
 
@@ -11,10 +12,9 @@ function App() {
   const [rideType, setRideType] = useState<RideType>('mini');
   const [fare, setFare] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const [searchingPlace, setSearchingPlace] = useState(false);
-  const [placeQuery, setPlaceQuery] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [ride, setRide] = useState<{ rideId: string; pickup: string; dropoff: string; fare: number; status: string } | null>(null);
+  const [rideProgress, setRideProgress] = useState<string[]>([]);
 
   const calculateFare = (selectedType: RideType, selectedPickup: string) => {
     const baseFare: Record<RideType, number> = { mini: 120, sedan: 170, suv: 220 };
@@ -73,45 +73,22 @@ function App() {
     );
   };
 
-  const handleSearchPlace = async () => {
-    const trimmedQuery = placeQuery.trim();
-
-    if (!trimmedQuery) {
-      setMessage('Please enter a place name or landmark to search.');
-      return;
-    }
-
-    setSearchingPlace(true);
-    setMessage('Searching for that place...');
-
-    try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q=${encodeURIComponent(trimmedQuery)}`);
-      const data = await response.json();
-
-      if (!Array.isArray(data) || data.length === 0) {
-        setMessage('No matching place found. Try a different name.');
-        return;
-      }
-
-      const firstMatch = data[0];
-      const resolvedLabel = formatLocationLabel(Number(firstMatch.lat), Number(firstMatch.lon), firstMatch);
-
-      setPickup(resolvedLabel);
-      setFare(calculateFare(rideType, resolvedLabel));
-      setMessage('Pickup location updated from place search.');
-    } catch (error) {
-      console.warn('Place search failed.', error);
-      setMessage('Unable to search that place right now. Please try again.');
-    } finally {
-      setSearchingPlace(false);
-    }
-  };
-
   const handleCheckFare = (event: React.FormEvent) => {
     event.preventDefault();
     const nextFare = calculateFare(rideType, pickup);
     setFare(nextFare);
     setMessage(`Estimated fare for ${rideType} ride: ₹${nextFare}`);
+  };
+
+  const refreshRideStatus = async (rideId: string) => {
+    try {
+      const response = await getRideStatus(rideId);
+      const currentStatus = response.data?.status || 'requested';
+      setRide((currentRide) => currentRide ? { ...currentRide, status: currentStatus } : currentRide);
+      setRideProgress(getRideProgressSteps(currentStatus));
+    } catch (error) {
+      console.warn('Unable to refresh ride status', error);
+    }
   };
 
   const handleBookRide = async (event: React.FormEvent) => {
@@ -130,7 +107,9 @@ function App() {
       const bookedRide = response.data;
       setRide(bookedRide);
       setFare(bookedRide.fare);
+      setRideProgress(['Ride requested']);
       setMessage(`Ride booked successfully. Status: ${bookedRide.status}`);
+      await refreshRideStatus(bookedRide.rideId);
     } catch (error: any) {
       const backendMessage = error?.response?.data?.error || 'Unable to reach the ride service right now.';
       setMessage(backendMessage);
@@ -200,24 +179,6 @@ function App() {
               <label htmlFor="pickup">Pickup</label>
               <input id="pickup" type="text" value={pickup} onChange={(event) => setPickup(event.target.value)} placeholder="Connaught Place" />
 
-              <div className="button-stack">
-                <input
-                  type="text"
-                  value={placeQuery}
-                  onChange={(event) => setPlaceQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void handleSearchPlace();
-                    }
-                  }}
-                  placeholder="Search area or landmark"
-                />
-                <button type="button" className="btn btn-ghost full-width" onClick={() => void handleSearchPlace()} disabled={searchingPlace}>
-                  {searchingPlace ? 'Searching...' : 'Search place'}
-                </button>
-              </div>
-
               <button type="button" className="btn btn-ghost" onClick={handleUseLocation}>Use my location</button>
 
               <label htmlFor="dropoff">Drop</label>
@@ -251,8 +212,22 @@ function App() {
               <div className="ride-summary">
                 <p className="ride-title">Latest booking</p>
                 <p>{ride.pickup} → {ride.dropoff}</p>
-                <p>Status: {ride.status}</p>
+                <p>Status: {getRideStatusLabel(ride.status as any)}</p>
                 <p>Ride ID: {ride.rideId}</p>
+                <div className="button-stack">
+                  <button type="button" className="btn btn-ghost full-width" onClick={() => void updateRideStatus(ride.rideId, 'accepted').then(() => refreshRideStatus(ride.rideId))}>
+                    Accept ride
+                  </button>
+                  <button type="button" className="btn btn-ghost full-width" onClick={() => void updateRideStatus(ride.rideId, 'arriving').then(() => refreshRideStatus(ride.rideId))}>
+                    Driver arriving
+                  </button>
+                  <button type="button" className="btn btn-ghost full-width" onClick={() => void updateRideStatus(ride.rideId, 'on_trip').then(() => refreshRideStatus(ride.rideId))}>
+                    Start trip
+                  </button>
+                </div>
+                <ul>
+                  {rideProgress.map((step) => <li key={step}>{step}</li>)}
+                </ul>
               </div>
             )}
           </aside>

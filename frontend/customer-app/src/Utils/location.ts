@@ -6,6 +6,9 @@ type ReverseGeocodeResult = {
     city?: string;
     state?: string;
     country?: string;
+    town?: string;
+    village?: string;
+    neighbourhood?: string;
   };
 };
 
@@ -20,6 +23,26 @@ export const formatLocationLabel = (
     return fallbackLabel;
   }
 
+  const address = result.address || {};
+
+  const placeCandidates = [address.road, address.neighbourhood, address.suburb, address.town, address.village];
+  const areaCandidates = [address.suburb, address.neighbourhood, address.town, address.village, address.city, address.state];
+
+  const place = placeCandidates.filter(Boolean).find((candidate) => candidate && candidate !== 'Unnamed Road') || '';
+  const area = areaCandidates.filter(Boolean).find((candidate) => candidate && candidate !== place) || '';
+
+  if (place && area && area !== place) {
+    return `${place}, ${area}`;
+  }
+
+  if (place) {
+    return place;
+  }
+
+  if (area) {
+    return area;
+  }
+
   const rawAddress = result.display_name || '';
   const parts = rawAddress
     .split(',')
@@ -28,14 +51,6 @@ export const formatLocationLabel = (
 
   if (parts.length >= 2) {
     return parts.slice(0, 2).join(', ');
-  }
-
-  if (result.address) {
-    const { road, suburb, city, state } = result.address;
-    const addressParts = [road, suburb, city, state].filter(Boolean) as string[];
-    if (addressParts.length > 0) {
-      return addressParts.slice(0, 2).join(', ');
-    }
   }
 
   return fallbackLabel;
