@@ -8,11 +8,6 @@ on:
       - 'backend/**'
       - '.github/workflows/deploy-backend.yml'
 
-env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: cab-company-backend
-  IMAGE_TAG: ${{ github.sha }}
-
 jobs:
   deploy:
     name: Build, push to ECR and deploy to App Runner
@@ -37,20 +32,81 @@ jobs:
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cab-company-backend
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./backend
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Deploy to App Runner
-        uses: awslabs/amazon-app-runner-deploy@main
-        with:
-          service: cab-company-backend
-          image: ${{ steps.build-image.outputs.image }}
-          access-role-arn: ${{ secrets.APP_RUNNER_ROLE_ARN }}
-          region: ${{ secrets.AWS_REGION }}
-          cpu: 0.25
-          memory: 0.5
-          port: 5000
-          wait-for-service-stability-seconds: 180
+      - name: Create or update App Runner service
+        env:
+          IMAGE_URI: ${{ steps.build-image.outputs.image }}
+          SERVICE_NAME: cab-company-backend
+          ROLE_ARN: ${{ secrets.APP_RUNNER_ROLE_ARN }}
+          REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          # Check if service already exists
+          SERVICE_ARN=$(aws apprunner list-services --region $REGION \
+            --query "ServiceSummaryList[?ServiceName=='$SERVICE_NAME'].ServiceArn" \
+            --output text)
+
+          if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" = "None" ]; then
+            echo "Creating new App Runner service..."
+            aws apprunner create-service \
+              --region $REGION \
+              --service-name $SERVICE_NAME \
+              --source-configuration "{
+                \"ImageRepository\": {
+                  \"ImageIdentifier\": \"$IMAGE_URI\",
+                  \"ImageConfiguration\": {
+                    \"Port\": \"5000\",
+                    \"RuntimeEnvironmentVariables\": {
+                      \"NODE_ENV\": \"production\"
+                    }
+                  },
+                  \"ImageRepositoryType\": \"ECR\"
+                },
+                \"AuthenticationConfiguration\": {
+                  \"AccessRoleArn\": \"$ROLE_ARN\"
+                },
+                \"AutoDeploymentsEnabled\": false
+              }" \
+              --instance-configuration "{
+                \"Cpu\": \"0.25 vCPU\",
+                \"Memory\": \"0.5 GB\"
+              }"
+          else
+            echo "Updating existing App Runner service $SERVICE_ARN..."
+            aws apprunner update-service \
+              --region $REGION \
+              --service-arn $SERVICE_ARN \
+              --source-configuration "{
+                \"ImageRepository\": {
+                  \"ImageIdentifier\": \"$IMAGE_URI\",
+                  \"ImageConfiguration\": {
+                    \"Port\": \"5000\",
+                    \"RuntimeEnvironmentVariables\": {
+                      \"NODE_ENV\": \"production\"
+                    }
+                  },
+                  \"ImageRepositoryType\": \"ECR\"
+                },
+                \"AuthenticationConfiguration\": {
+                  \"AccessRoleArn\": \"$ROLE_ARN\"
+                },
+                \"AutoDeploymentsEnabled\": false
+              }"
+          fi
+
+          echo "Waiting for service to be running..."
+          aws apprunner wait service-running \
+            --region $REGION \
+            --service-name $SERVICE_NAME 2>/dev/null || true
+
+          # Print the service URL
+          aws apprunner list-services --region $REGION \
+            --query "ServiceSummaryList[?ServiceName=='$SERVICE_NAME'].ServiceUrl" \
+            --output text
+
