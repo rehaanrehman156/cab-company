@@ -1,416 +1,354 @@
+// NEW UI — complete rewrite
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { bookRide, getRideStatus, updateRideStatus } from './Services/rides';
 import { formatLocationLabel } from './Utils/location';
 import { getRideStatusLabel } from './Utils/rideProgress';
 
+/* ─── types ─────────────────────────────────────────────────────────────── */
 type RideType = 'mini' | 'sedan' | 'suv';
+type Screen   = 'home' | 'booking' | 'tracking';
 
 type PlaceSuggestion = {
   place_id: number;
   display_name: string;
-  lat: string;
-  lon: string;
 };
 
+const RIDE_OPTIONS: { type: RideType; label: string; icon: string; seats: string; eta: string; base: number }[] = [
+  { type: 'mini',  label: 'Mini',  icon: '🚗', seats: '4', eta: '3 min', base: 120 },
+  { type: 'sedan', label: 'Sedan', icon: '🚙', seats: '4', eta: '5 min', base: 170 },
+  { type: 'suv',   label: 'SUV',   icon: '🚐', seats: '6', eta: '7 min', base: 220 },
+];
+
+const STEPS = ['requested', 'accepted', 'arriving', 'on_trip', 'completed'] as const;
+const STEP_LABELS: Record<string, string> = {
+  requested: 'Ride requested',
+  accepted:  'Driver assigned',
+  arriving:  'Driver arriving',
+  on_trip:   'Trip in progress',
+  completed: 'Trip completed',
+};
+
+/* ─── autocomplete hook ──────────────────────────────────────────────────── */
 function usePlaceAutocomplete(query: string) {
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (query.trim().length < 3) {
-      setSuggestions([]);
-      return;
-    }
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
+    if (query.trim().length < 3) { setSuggestions([]); return; }
+    if (t.current) clearTimeout(t.current);
+    t.current = setTimeout(async () => {
       try {
-        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(query)}`;
-        const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=${encodeURIComponent(query)}`,
+          { headers: { 'Accept-Language': 'en' } }
+        );
         const data: PlaceSuggestion[] = await res.json();
         setSuggestions(Array.isArray(data) ? data : []);
-      } catch {
-        setSuggestions([]);
-      }
+      } catch { setSuggestions([]); }
     }, 400);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    return () => { if (t.current) clearTimeout(t.current); };
   }, [query]);
-
   const clear = useCallback(() => setSuggestions([]), []);
   return { suggestions, clear };
 }
 
-function App() {
-  const [pickup, setPickup] = useState('');
-  const [dropoff, setDropoff] = useState('');
-  const [pickupRaw, setPickupRaw] = useState('');
-  const [dropoffRaw, setDropoffRaw] = useState('');
-  const [rideType, setRideType] = useState<RideType>('mini');
-  const [fare, setFare] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [ride, setRide] = useState<{ rideId: string; pickup: string; dropoff: string; fare: number; status: string } | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const pickupAC = usePlaceAutocomplete(pickupRaw);
-  const dropoffAC = usePlaceAutocomplete(dropoffRaw);
-
-  const calculateFare = (selectedType: RideType, selectedPickup: string) => {
-    const baseFare: Record<RideType, number> = { mini: 120, sedan: 170, suv: 220 };
-    const locationBoost = selectedPickup.includes('Current location') ? 24 : 12;
-    return baseFare[selectedType] + locationBoost;
-  };
-
-  useEffect(() => {
-    if (!ride) {
-      const nextFare = calculateFare(rideType, pickup);
-      setFare(nextFare);
-    }
-  }, [rideType, pickup, ride]);
-
-  const handleUseLocation = () => {
-    if (!('geolocation' in navigator)) {
-      setMessage('Geolocation is not available in this browser.');
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const { latitude, longitude } = position.coords;
-        const nextPickup = formatLocationLabel(latitude, longitude);
-        setPickup(nextPickup);
-        setPickupRaw(nextPickup);
-        pickupAC.clear();
-        setMessage('Resolving your current area and place...');
-
-        try {
-          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
-          const data = await response.json();
-          const resolvedLabel = formatLocationLabel(latitude, longitude, data);
-          setPickup(resolvedLabel);
-          setPickupRaw(resolvedLabel);
-          setMessage('Pickup location detected successfully.');
-        } catch (error) {
-          console.warn('Reverse geocoding failed, using coordinates instead.', error);
-          setMessage('Pickup location detected successfully.');
-        }
-      },
-      (error) => {
-        let description = 'Unable to access your location right now.';
-        if (error.code === 1) description = 'Location access was denied. Please allow location access or type your pickup manually.';
-        else if (error.code === 2) description = 'Location information is unavailable. Please try again or type your pickup manually.';
-        else if (error.code === 3) description = 'Location lookup timed out. Please try again or type your pickup manually.';
-        setMessage(description);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
-  };
-
-  const handleCheckFare = (event: React.FormEvent) => {
-    event.preventDefault();
-    const nextFare = calculateFare(rideType, pickup);
-    setFare(nextFare);
-    setMessage(`Estimated fare for ${rideType} ride: ₹${nextFare}`);
-  };
-
-  const refreshRideStatus = async (rideId: string) => {
-    try {
-      const response = await getRideStatus(rideId);
-      const currentStatus: string = response.data?.status || 'requested';
-      setRide((currentRide) => currentRide ? { ...currentRide, status: currentStatus } : currentRide);
-      if (currentStatus === 'completed' || currentStatus === 'cancelled') {
-        if (pollRef.current) clearInterval(pollRef.current);
-      }
-    } catch (error) {
-      console.warn('Unable to refresh ride status', error);
-    }
-  };
-
-  const startPolling = (rideId: string) => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => { void refreshRideStatus(rideId); }, 5000);
-  };
-
-  useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
-
-  const handleBookRide = async (event: React.FormEvent) => {
-    event.preventDefault();
-
-    if (!pickup.trim() || !dropoff.trim()) {
-      setMessage('Please select a pickup and drop-off from the suggestions.');
-      return;
-    }
-
-    setLoading(true);
-    setMessage(null);
-
-    try {
-      const response = await bookRide(pickup, dropoff);
-      const bookedRide = response.data;
-      setRide(bookedRide);
-      setFare(bookedRide.fare);
-      setMessage(null);
-      await refreshRideStatus(bookedRide.rideId);
-      startPolling(bookedRide.rideId);
-    } catch (error: any) {
-      const backendMessage = error?.response?.data?.error || 'Unable to reach the ride service right now.';
-      setMessage(backendMessage);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const scrollToBooking = () => {
-    document.getElementById('ride-booking-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
+/* ─── location input component ──────────────────────────────────────────── */
+function LocationInput({ id, raw, value, icon, placeholder, onChange, onSelect, suggestions, onClear }: {
+  id: string; raw: string; value: string; icon: string; placeholder: string;
+  onChange: (v: string) => void; onSelect: (l: string) => void;
+  suggestions: PlaceSuggestion[]; onClear: () => void;
+}) {
   return (
-    <div className="cab-app">
-      <div className="ambient-glow ambient-left" />
-      <div className="ambient-glow ambient-right" />
-
-      <header className="topbar section-shell fade-in-up">
-        <div className="brand-row">
-          <div className="brand-mark" aria-hidden="true">C</div>
-          <div>
-            <p className="brand-kicker">Cab Company</p>
-            <h1 className="brand-title">City rides that feel first class</h1>
-          </div>
-        </div>
-        <nav className="top-links" aria-label="Primary navigation">
-          <a href="#services">Services</a>
-          <a href="#fleet">Fleet</a>
-          <a href="#safety">Safety</a>
-          <a href="#contact">Contact</a>
-        </nav>
-      </header>
-
-      <main className="section-shell">
-        <section className="hero-grid fade-in-up delay-1">
-          <article className="hero-copy">
-            <p className="eyebrow">Fast pickup. Fair fares. Trusted drivers.</p>
-            <h2>Book your ride across town in under 20 seconds.</h2>
-            <p className="hero-text">
-              From office commutes to airport trips, Cab Company matches you with verified
-              drivers, smart route planning, and live trip tracking.
-            </p>
-            <div className="cta-row">
-              <button type="button" className="btn btn-primary" onClick={scrollToBooking}>Book A Ride</button>
-              <button type="button" className="btn btn-ghost" onClick={() => setMessage('Scheduling is ready for the next iteration of the product.')}>Schedule For Later</button>
-            </div>
-            <div className="stats-row" aria-label="Service highlights">
-              <div>
-                <p className="stat-number">4.9/5</p>
-                <p className="stat-label">Average rider rating</p>
-              </div>
-              <div>
-                <p className="stat-number">3 min</p>
-                <p className="stat-label">Typical pickup time</p>
-              </div>
-              <div>
-                <p className="stat-number">24/7</p>
-                <p className="stat-label">Customer support</p>
-              </div>
-            </div>
-          </article>
-
-          <aside className="booking-card" aria-label="Ride estimator" id="ride-booking-form">
-            <p className="booking-kicker">Quick Fare Estimator</p>
-            <h3>Where are you heading?</h3>
-            <form className="booking-form" onSubmit={handleBookRide}>
-              <label htmlFor="pickup">Pickup</label>
-              <div className="autocomplete-wrap">
-                <input
-                  id="pickup"
-                  type="text"
-                  value={pickupRaw}
-                  onChange={(e) => { setPickupRaw(e.target.value); setPickup(''); }}
-                  placeholder="e.g. Connaught Place, Delhi"
-                  autoComplete="off"
-                />
-                {pickupAC.suggestions.length > 0 && (
-                  <ul className="autocomplete-list">
-                    {pickupAC.suggestions.map((s) => (
-                      <li
-                        key={s.place_id}
-                        className="autocomplete-item"
-                        onMouseDown={() => {
-                          const label = s.display_name.split(',').slice(0, 3).join(',').trim();
-                          setPickup(label);
-                          setPickupRaw(label);
-                          pickupAC.clear();
-                        }}
-                      >
-                        {s.display_name.split(',').slice(0, 3).join(',').trim()}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <button type="button" className="btn btn-ghost" onClick={handleUseLocation}>Use my location</button>
-
-              <label htmlFor="dropoff">Drop</label>
-              <div className="autocomplete-wrap">
-                <input
-                  id="dropoff"
-                  type="text"
-                  value={dropoffRaw}
-                  onChange={(e) => { setDropoffRaw(e.target.value); setDropoff(''); }}
-                  placeholder="e.g. Indira Gandhi International Airport"
-                  autoComplete="off"
-                />
-                {dropoffAC.suggestions.length > 0 && (
-                  <ul className="autocomplete-list">
-                    {dropoffAC.suggestions.map((s) => (
-                      <li
-                        key={s.place_id}
-                        className="autocomplete-item"
-                        onMouseDown={() => {
-                          const label = s.display_name.split(',').slice(0, 3).join(',').trim();
-                          setDropoff(label);
-                          setDropoffRaw(label);
-                          dropoffAC.clear();
-                        }}
-                      >
-                        {s.display_name.split(',').slice(0, 3).join(',').trim()}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <label htmlFor="rideType">Ride Type</label>
-              <select id="rideType" value={rideType} onChange={(event) => setRideType(event.target.value as RideType)}>
-                <option value="mini">Mini</option>
-                <option value="sedan">Sedan</option>
-                <option value="suv">SUV</option>
-              </select>
-
-              <div className="button-stack">
-                <button type="submit" className="btn btn-primary full-width" disabled={loading}>
-                  {loading ? 'Booking...' : 'Book A Ride'}
-                </button>
-                <button type="button" className="btn btn-ghost full-width" onClick={handleCheckFare}>
-                  Check Fare
-                </button>
-              </div>
-            </form>
-
-            {message && <p className="helper-text">{message}</p>}
-            {fare !== null && !ride && (
-              <div className="fare-summary">
-                <p className="fare-label">Estimated fare</p>
-                <p className="fare-value">₹{fare}</p>
-              </div>
-            )}
-            {ride && (
-              <div className="ride-status-card">
-                <div className="ride-status-header">
-                  <div>
-                    <p className="ride-status-label">{getRideStatusLabel(ride.status as any)}</p>
-                    <p className="ride-route">{ride.pickup} → {ride.dropoff}</p>
-                  </div>
-                  <div className="ride-fare-badge">₹{ride.fare}</div>
-                </div>
-                <ol className="ride-timeline">
-                  {(['requested', 'accepted', 'arriving', 'on_trip', 'completed'] as const).map((step, i) => {
-                    const labels: Record<string, string> = {
-                      requested: 'Ride requested',
-                      accepted: 'Driver assigned',
-                      arriving: 'Driver arriving',
-                      on_trip: 'Trip in progress',
-                      completed: 'Trip completed'
-                    };
-                    const currentIndex = ['requested','accepted','arriving','on_trip','completed'].indexOf(ride.status);
-                    const isDone = i <= currentIndex;
-                    const isActive = i === currentIndex;
-                    return (
-                      <li key={step} className={`timeline-step${isDone ? ' done' : ''}${isActive ? ' active' : ''}`}>
-                        <span className="timeline-dot" />
-                        <span>{labels[step]}</span>
-                      </li>
-                    );
-                  })}
-                </ol>
-                {ride.status !== 'completed' && ride.status !== 'cancelled' && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost full-width"
-                    onClick={() => {
-                      void updateRideStatus(ride.rideId, 'cancelled').then(() => {
-                        setRide((r) => r ? { ...r, status: 'cancelled' } : r);
-                        if (pollRef.current) clearInterval(pollRef.current);
-                      });
-                    }}
-                  >
-                    Cancel ride
-                  </button>
-                )}
-                {(ride.status === 'completed' || ride.status === 'cancelled') && (
-                  <button
-                    type="button"
-                    className="btn btn-primary full-width"
-                    onClick={() => {
-                      setRide(null);
-                      setPickup('');
-                      setPickupRaw('');
-                      setDropoff('');
-                      setDropoffRaw('');
-                    }}
-                  >
-                    Book another ride
-                  </button>
-                )}
-              </div>
-            )}
-          </aside>
-        </section>
-
-        <section id="services" className="card-grid fade-in-up delay-2">
-          <article className="info-card">
-            <h3>City Commute</h3>
-            <p>Reliable rides for daily office routes with consistent pickup windows.</p>
-          </article>
-          <article className="info-card">
-            <h3>Airport Transfer</h3>
-            <p>Flight-aware trips with luggage-friendly vehicles and professional drivers.</p>
-          </article>
-          <article className="info-card">
-            <h3>Hourly Rental</h3>
-            <p>Keep a cab on standby for meetings, shopping, or full-day city plans.</p>
-          </article>
-        </section>
-
-        <section id="fleet" className="fleet-panel fade-in-up delay-3">
-          <div>
-            <p className="eyebrow">Fleet quality</p>
-            <h3>Clean cars. Skilled drivers. Transparent pricing.</h3>
-          </div>
-          <div className="fleet-badges">
-            <span>AC Enabled</span>
-            <span>Live GPS</span>
-            <span>Panic Button</span>
-            <span>Cashless Ready</span>
-          </div>
-        </section>
-
-        <section id="safety" className="testimonial-shell fade-in-up delay-3">
-          <blockquote>
-            "I booked a ride at 6:15 AM and the driver arrived in under four minutes.
-            The app updates were accurate from pickup to drop."
-          </blockquote>
-          <p>Priya S., frequent commuter</p>
-        </section>
-      </main>
-
-      <footer id="contact" className="footer section-shell fade-in-up delay-3">
-        <p>Cab Company • Support: +91 90000 00000 • help@cabcompany.com</p>
-      </footer>
+    <div className="loc-row">
+      <span className={`loc-dot ${icon}`} />
+      <div className="loc-field">
+        <input
+          id={id} type="text" value={raw} autoComplete="off"
+          placeholder={placeholder} className="loc-input"
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {value && <span className="loc-confirmed">✓</span>}
+        {suggestions.length > 0 && (
+          <ul className="sug-list">
+            {suggestions.map((s) => {
+              const label = s.display_name.split(',').slice(0, 3).join(', ');
+              return (
+                <li key={s.place_id} className="sug-item"
+                  onMouseDown={() => { onSelect(label); onClear(); }}>
+                  📍 {label}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
 
-export default App;
+/* ─── main app ───────────────────────────────────────────────────────────── */
+export default function App() {
+  const [screen, setScreen]         = useState<Screen>('home');
+  const [pickup, setPickup]         = useState('');
+  const [pickupRaw, setPickupRaw]   = useState('');
+  const [dropoff, setDropoff]       = useState('');
+  const [dropoffRaw, setDropoffRaw] = useState('');
+  const [rideType, setRideType]     = useState<RideType>('mini');
+  const [loading, setLoading]       = useState(false);
+  const [locating, setLocating]     = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const [ride, setRide] = useState<{
+    rideId: string; pickup: string; dropoff: string; fare: number; status: string;
+  } | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pickupAC  = usePlaceAutocomplete(pickupRaw);
+  const dropoffAC = usePlaceAutocomplete(dropoffRaw);
+
+  const selected = RIDE_OPTIONS.find((o) => o.type === rideType)!;
+  const fare = selected.base + 12;
+
+  const handleUseLocation = () => {
+    if (!('geolocation' in navigator)) { setError('Geolocation not available.'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude: lat, longitude: lon } = pos.coords;
+        const fallback = formatLocationLabel(lat, lon);
+        setPickup(fallback); setPickupRaw(fallback);
+        try {
+          const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
+          const data = await res.json();
+          const label = formatLocationLabel(lat, lon, data);
+          setPickup(label); setPickupRaw(label);
+        } catch { /* use fallback */ }
+        setLocating(false);
+      },
+      () => { setError('Could not get location. Type it manually.'); setLocating(false); },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  const refreshStatus = async (rideId: string) => {
+    try {
+      const res    = await getRideStatus(rideId);
+      const status = res.data?.status || 'requested';
+      setRide((r) => r ? { ...r, status } : r);
+      if (status === 'completed' || status === 'cancelled') {
+        if (pollRef.current) clearInterval(pollRef.current);
+      }
+    } catch { /* silent */ }
+  };
+
+  const startPolling = (rideId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => { void refreshStatus(rideId); }, 5000);
+  };
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const handleBook = async () => {
+    if (!pickup || !dropoff) { setError('Please select both pickup and drop-off.'); return; }
+    setLoading(true); setError(null);
+    try {
+      const res    = await bookRide(pickup, dropoff);
+      const booked = res.data;
+      setRide(booked);
+      setScreen('tracking');
+      startPolling(booked.rideId);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Booking failed. Is the backend running?');
+    } finally { setLoading(false); }
+  };
+
+  const handleCancel = async () => {
+    if (!ride) return;
+    await updateRideStatus(ride.rideId, 'cancelled');
+    setRide((r) => r ? { ...r, status: 'cancelled' } : r);
+    if (pollRef.current) clearInterval(pollRef.current);
+  };
+
+  const resetAll = () => {
+    setRide(null); setPickup(''); setPickupRaw('');
+    setDropoff(''); setDropoffRaw(''); setError(null);
+    setScreen('home');
+  };
+
+  /* ── tracking screen ──────────────────────────────────────────────────── */
+  if (screen === 'tracking' && ride) {
+    const currentIdx = STEPS.indexOf(ride.status as any);
+    const isFinal    = ride.status === 'completed' || ride.status === 'cancelled';
+    return (
+      <div className="app">
+        <header className="app-bar">
+          <button className="back-btn" onClick={resetAll}>←</button>
+          <span className="app-bar-title">Your ride</span>
+          <span />
+        </header>
+        <div className="tracking-page">
+          <div className="map-mock">
+            <span className="map-car-icon">🚗</span>
+            <p className="map-status-label">
+              {isFinal
+                ? ride.status === 'completed' ? '✅ Trip complete' : '❌ Cancelled'
+                : getRideStatusLabel(ride.status as any)}
+            </p>
+          </div>
+          <div className="bottom-sheet">
+            <div className="bs-handle" />
+            <div className="bs-top">
+              <div>
+                <p className="bs-status">{getRideStatusLabel(ride.status as any)}</p>
+                <p className="bs-route">{ride.pickup} → {ride.dropoff}</p>
+              </div>
+              <span className="bs-fare">₹{ride.fare}</span>
+            </div>
+            <ol className="timeline">
+              {STEPS.map((step, i) => {
+                const done   = i <= currentIdx;
+                const active = i === currentIdx;
+                return (
+                  <li key={step} className={`tl-step${done ? ' done' : ''}${active ? ' active' : ''}`}>
+                    <span className="tl-dot" />
+                    <span className="tl-text">{STEP_LABELS[step]}</span>
+                    {active && <span className="tl-now">Now</span>}
+                  </li>
+                );
+              })}
+            </ol>
+            {!isFinal && (
+              <button className="btn-cancel" onClick={handleCancel}>Cancel ride</button>
+            )}
+            {isFinal && (
+              <button className="btn-primary" onClick={resetAll}>Book another ride</button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── booking screen ───────────────────────────────────────────────────── */
+  if (screen === 'booking') {
+    return (
+      <div className="app">
+        <header className="app-bar">
+          <button className="back-btn" onClick={() => setScreen('home')}>←</button>
+          <span className="app-bar-title">Book a ride</span>
+          <span />
+        </header>
+        <div className="booking-page">
+          <div className="loc-card">
+            <LocationInput
+              id="pickup" raw={pickupRaw} value={pickup} icon="green"
+              placeholder="Pickup location"
+              onChange={(v) => { setPickupRaw(v); setPickup(''); }}
+              onSelect={(l) => { setPickup(l); setPickupRaw(l); pickupAC.clear(); }}
+              suggestions={pickupAC.suggestions} onClear={pickupAC.clear}
+            />
+            <div className="loc-sep" />
+            <LocationInput
+              id="dropoff" raw={dropoffRaw} value={dropoff} icon="red"
+              placeholder="Drop-off location"
+              onChange={(v) => { setDropoffRaw(v); setDropoff(''); }}
+              onSelect={(l) => { setDropoff(l); setDropoffRaw(l); dropoffAC.clear(); }}
+              suggestions={dropoffAC.suggestions} onClear={dropoffAC.clear}
+            />
+          </div>
+
+          <button className="use-loc-btn" onClick={handleUseLocation} disabled={locating}>
+            {locating ? '📡 Detecting location…' : '📍 Use my current location'}
+          </button>
+
+          <p className="section-title">Choose ride type</p>
+          <div className="ride-types">
+            {RIDE_OPTIONS.map((opt) => (
+              <button
+                key={opt.type}
+                className={`ride-card${rideType === opt.type ? ' selected' : ''}`}
+                onClick={() => setRideType(opt.type)}
+              >
+                <span className="rc-icon">{opt.icon}</span>
+                <span className="rc-name">{opt.label}</span>
+                <span className="rc-seats">{opt.seats} seats</span>
+                <span className="rc-eta">{opt.eta}</span>
+                <span className="rc-fare">₹{opt.base + 12}</span>
+              </button>
+            ))}
+          </div>
+
+          {error && <p className="error-bar">{error}</p>}
+
+          <div className="confirm-bar">
+            <div className="confirm-fare">
+              <span className="cf-label">Estimated</span>
+              <span className="cf-value">₹{fare}</span>
+            </div>
+            <button
+              className="btn-primary"
+              onClick={handleBook}
+              disabled={loading || !pickup || !dropoff}
+            >
+              {loading ? 'Booking…' : 'Confirm ride'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── home screen ──────────────────────────────────────────────────────── */
+  return (
+    <div className="app home">
+      <header className="home-bar">
+        <div className="home-logo">
+          <span className="logo-icon">🚕</span>
+          <span className="logo-text">CabCo</span>
+        </div>
+        <nav className="home-nav">
+          <a href="#services">Services</a>
+          <a href="#about">About</a>
+        </nav>
+      </header>
+
+      <section className="hero">
+        <p className="hero-tag">Fast · Safe · Affordable</p>
+        <h1 className="hero-heading">Your ride,<br />on demand.</h1>
+        <p className="hero-sub">Book a cab in seconds. Track it live. Arrive on time.</p>
+
+        <button className="where-to-btn" onClick={() => setScreen('booking')}>
+          <span className="wt-pin">📍</span>
+          <span className="wt-text">Where do you want to go?</span>
+          <span className="wt-arrow">›</span>
+        </button>
+
+        <div className="hero-stats">
+          <div className="stat"><span className="sv">4.9★</span><span className="sk">Rating</span></div>
+          <div className="stat-sep" />
+          <div className="stat"><span className="sv">3 min</span><span className="sk">Avg pickup</span></div>
+          <div className="stat-sep" />
+          <div className="stat"><span className="sv">24/7</span><span className="sk">Support</span></div>
+        </div>
+      </section>
+
+      <section id="services" className="services-section">
+        <p className="section-title">What are you looking for?</p>
+        <div className="services-grid">
+          {[
+            { icon: '🚗', name: 'City Ride',     desc: 'Affordable daily rides' },
+            { icon: '✈️', name: 'Airport',        desc: 'Flight-aware transfers' },
+            { icon: '🕐', name: 'Hourly Rental', desc: 'Keep a cab on standby' },
+            { icon: '🌙', name: 'Night Rides',   desc: 'Safe late-night travel' },
+          ].map((s) => (
+            <button key={s.name} className="svc-card" onClick={() => setScreen('booking')}>
+              <span className="svc-icon">{s.icon}</span>
+              <span className="svc-name">{s.name}</span>
+              <span className="svc-desc">{s.desc}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+

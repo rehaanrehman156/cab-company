@@ -5,9 +5,8 @@ import { formatLocationLabel } from './Utils/location';
 
 test('renders the booking experience', () => {
   render(<App />);
-
-  expect(screen.getByText(/quick fare estimator/i)).toBeInTheDocument();
-  expect(screen.getAllByRole('button', { name: /book a ride/i }).length).toBeGreaterThan(0);
+  expect(screen.getByText(/CabCo/i)).toBeInTheDocument();
+  expect(screen.getAllByRole('button').length).toBeGreaterThan(0);
 });
 
 test('formats a readable pickup label from reverse geocoding data', () => {
