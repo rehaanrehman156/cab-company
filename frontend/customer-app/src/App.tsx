@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { bookRide, getRideStatus, updateRideStatus } from './Services/rides';
 import { formatLocationLabel } from './Utils/location';
@@ -6,9 +6,45 @@ import { getRideProgressSteps, getRideStatusLabel } from './Utils/rideProgress';
 
 type RideType = 'mini' | 'sedan' | 'suv';
 
+type PlaceSuggestion = {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+};
+
+function usePlaceAutocomplete(query: string) {
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (query.trim().length < 3) {
+      setSuggestions([]);
+      return;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(query)}`;
+        const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+        const data: PlaceSuggestion[] = await res.json();
+        setSuggestions(Array.isArray(data) ? data : []);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 400);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [query]);
+
+  const clear = useCallback(() => setSuggestions([]), []);
+  return { suggestions, clear };
+}
+
 function App() {
-  const [pickup, setPickup] = useState('Current location');
-  const [dropoff, setDropoff] = useState('Airport Terminal 3');
+  const [pickup, setPickup] = useState('');
+  const [dropoff, setDropoff] = useState('');
+  const [pickupRaw, setPickupRaw] = useState('');
+  const [dropoffRaw, setDropoffRaw] = useState('');
   const [rideType, setRideType] = useState<RideType>('mini');
   const [fare, setFare] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -16,11 +52,21 @@ function App() {
   const [ride, setRide] = useState<{ rideId: string; pickup: string; dropoff: string; fare: number; status: string } | null>(null);
   const [rideProgress, setRideProgress] = useState<string[]>([]);
 
+  const pickupAC = usePlaceAutocomplete(pickupRaw);
+  const dropoffAC = usePlaceAutocomplete(dropoffRaw);
+
   const calculateFare = (selectedType: RideType, selectedPickup: string) => {
     const baseFare: Record<RideType, number> = { mini: 120, sedan: 170, suv: 220 };
     const locationBoost = selectedPickup.includes('Current location') ? 24 : 12;
     return baseFare[selectedType] + locationBoost;
   };
+
+  useEffect(() => {
+    if (!ride) {
+      const nextFare = calculateFare(rideType, pickup);
+      setFare(nextFare);
+    }
+  }, [rideType, pickup, ride]);
 
   const handleUseLocation = () => {
     if (!('geolocation' in navigator)) {
@@ -32,44 +78,31 @@ function App() {
       async (position) => {
         const { latitude, longitude } = position.coords;
         const nextPickup = formatLocationLabel(latitude, longitude);
-
         setPickup(nextPickup);
-        setFare(calculateFare(rideType, nextPickup));
+        setPickupRaw(nextPickup);
+        pickupAC.clear();
         setMessage('Resolving your current area and place...');
 
         try {
           const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
           const data = await response.json();
           const resolvedLabel = formatLocationLabel(latitude, longitude, data);
-
           setPickup(resolvedLabel);
-          setFare(calculateFare(rideType, resolvedLabel));
+          setPickupRaw(resolvedLabel);
           setMessage('Pickup location detected successfully.');
         } catch (error) {
           console.warn('Reverse geocoding failed, using coordinates instead.', error);
-          setPickup(nextPickup);
-          setFare(calculateFare(rideType, nextPickup));
           setMessage('Pickup location detected successfully.');
         }
       },
       (error) => {
         let description = 'Unable to access your location right now.';
-
-        if (error.code === 1) {
-          description = 'Location access was denied. Please allow location access or enter your pickup manually.';
-        } else if (error.code === 2) {
-          description = 'Location information is unavailable. Please try again or enter your pickup manually.';
-        } else if (error.code === 3) {
-          description = 'Location lookup timed out. Please try again or enter your pickup manually.';
-        }
-
+        if (error.code === 1) description = 'Location access was denied. Please allow location access or type your pickup manually.';
+        else if (error.code === 2) description = 'Location information is unavailable. Please try again or type your pickup manually.';
+        else if (error.code === 3) description = 'Location lookup timed out. Please try again or type your pickup manually.';
         setMessage(description);
       },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0
-      }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
@@ -95,7 +128,7 @@ function App() {
     event.preventDefault();
 
     if (!pickup.trim() || !dropoff.trim()) {
-      setMessage('Please enter both pickup and dropoff locations.');
+      setMessage('Please select a pickup and drop-off from the suggestions.');
       return;
     }
 
@@ -175,14 +208,74 @@ function App() {
           <aside className="booking-card" aria-label="Ride estimator" id="ride-booking-form">
             <p className="booking-kicker">Quick Fare Estimator</p>
             <h3>Where are you heading?</h3>
+            <div className="fare-summary">
+              <p className="fare-label">Trip route</p>
+              <p className="fare-value" style={{ fontSize: '0.95rem', lineHeight: 1.5 }}>
+                {pickup || 'Pickup location'} → {dropoff || 'Drop-off location'}
+              </p>
+            </div>
             <form className="booking-form" onSubmit={handleBookRide}>
               <label htmlFor="pickup">Pickup</label>
-              <input id="pickup" type="text" value={pickup} onChange={(event) => setPickup(event.target.value)} placeholder="Connaught Place" />
+              <div className="autocomplete-wrap">
+                <input
+                  id="pickup"
+                  type="text"
+                  value={pickupRaw}
+                  onChange={(e) => { setPickupRaw(e.target.value); setPickup(''); }}
+                  placeholder="e.g. Connaught Place, Delhi"
+                  autoComplete="off"
+                />
+                {pickupAC.suggestions.length > 0 && (
+                  <ul className="autocomplete-list">
+                    {pickupAC.suggestions.map((s) => (
+                      <li
+                        key={s.place_id}
+                        className="autocomplete-item"
+                        onMouseDown={() => {
+                          const label = s.display_name.split(',').slice(0, 3).join(',').trim();
+                          setPickup(label);
+                          setPickupRaw(label);
+                          pickupAC.clear();
+                        }}
+                      >
+                        {s.display_name.split(',').slice(0, 3).join(',').trim()}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
 
               <button type="button" className="btn btn-ghost" onClick={handleUseLocation}>Use my location</button>
 
               <label htmlFor="dropoff">Drop</label>
-              <input id="dropoff" type="text" value={dropoff} onChange={(event) => setDropoff(event.target.value)} placeholder="Airport Terminal 3" />
+              <div className="autocomplete-wrap">
+                <input
+                  id="dropoff"
+                  type="text"
+                  value={dropoffRaw}
+                  onChange={(e) => { setDropoffRaw(e.target.value); setDropoff(''); }}
+                  placeholder="e.g. Indira Gandhi International Airport"
+                  autoComplete="off"
+                />
+                {dropoffAC.suggestions.length > 0 && (
+                  <ul className="autocomplete-list">
+                    {dropoffAC.suggestions.map((s) => (
+                      <li
+                        key={s.place_id}
+                        className="autocomplete-item"
+                        onMouseDown={() => {
+                          const label = s.display_name.split(',').slice(0, 3).join(',').trim();
+                          setDropoff(label);
+                          setDropoffRaw(label);
+                          dropoffAC.clear();
+                        }}
+                      >
+                        {s.display_name.split(',').slice(0, 3).join(',').trim()}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
 
               <label htmlFor="rideType">Ride Type</label>
               <select id="rideType" value={rideType} onChange={(event) => setRideType(event.target.value as RideType)}>
