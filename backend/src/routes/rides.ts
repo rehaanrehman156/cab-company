@@ -7,6 +7,18 @@ const router = Router();
 
 const validStatuses: RideStatus[] = ["requested", "accepted", "arriving", "on_trip", "completed", "cancelled"];
 
+const statusProgression: RideStatus[] = ['accepted', 'arriving', 'on_trip', 'completed'];
+
+function scheduleRideProgression(rideId: string) {
+  const delays = [8000, 20000, 35000, 60000]; // seconds after booking
+  statusProgression.forEach((status, i) => {
+    setTimeout(async () => {
+      const ride = await rideRepository.updateStatus(rideId, status);
+      if (ride) emitRideStatusChanged(ride);
+    }, delays[i]);
+  });
+}
+
 router.post("/book", async (req, res) => {
   const { pickup, dropoff } = req.body;
 
@@ -17,6 +29,7 @@ router.post("/book", async (req, res) => {
   const ride = await rideRepository.createRide(String(pickup), String(dropoff));
   emitRideCreated(ride);
   emitRideStatusChanged(ride);
+  scheduleRideProgression(ride.rideId);
   return res.status(201).json(ride);
 });
 

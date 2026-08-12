@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { bookRide, getRideStatus, updateRideStatus } from './Services/rides';
 import { formatLocationLabel } from './Utils/location';
-import { getRideProgressSteps, getRideStatusLabel } from './Utils/rideProgress';
+import { getRideStatusLabel } from './Utils/rideProgress';
 
 type RideType = 'mini' | 'sedan' | 'suv';
 
@@ -50,7 +50,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [ride, setRide] = useState<{ rideId: string; pickup: string; dropoff: string; fare: number; status: string } | null>(null);
-  const [rideProgress, setRideProgress] = useState<string[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pickupAC = usePlaceAutocomplete(pickupRaw);
   const dropoffAC = usePlaceAutocomplete(dropoffRaw);
@@ -116,13 +116,24 @@ function App() {
   const refreshRideStatus = async (rideId: string) => {
     try {
       const response = await getRideStatus(rideId);
-      const currentStatus = response.data?.status || 'requested';
+      const currentStatus: string = response.data?.status || 'requested';
       setRide((currentRide) => currentRide ? { ...currentRide, status: currentStatus } : currentRide);
-      setRideProgress(getRideProgressSteps(currentStatus));
+      if (currentStatus === 'completed' || currentStatus === 'cancelled') {
+        if (pollRef.current) clearInterval(pollRef.current);
+      }
     } catch (error) {
       console.warn('Unable to refresh ride status', error);
     }
   };
+
+  const startPolling = (rideId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => { void refreshRideStatus(rideId); }, 5000);
+  };
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
 
   const handleBookRide = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -140,9 +151,9 @@ function App() {
       const bookedRide = response.data;
       setRide(bookedRide);
       setFare(bookedRide.fare);
-      setRideProgress(['Ride requested']);
-      setMessage(`Ride booked successfully. Status: ${bookedRide.status}`);
+      setMessage(null);
       await refreshRideStatus(bookedRide.rideId);
+      startPolling(bookedRide.rideId);
     } catch (error: any) {
       const backendMessage = error?.response?.data?.error || 'Unable to reach the ride service right now.';
       setMessage(backendMessage);
@@ -289,32 +300,70 @@ function App() {
             </form>
 
             {message && <p className="helper-text">{message}</p>}
-            {fare !== null && (
+            {fare !== null && !ride && (
               <div className="fare-summary">
                 <p className="fare-label">Estimated fare</p>
                 <p className="fare-value">₹{fare}</p>
               </div>
             )}
             {ride && (
-              <div className="ride-summary">
-                <p className="ride-title">Latest booking</p>
-                <p>{ride.pickup} → {ride.dropoff}</p>
-                <p>Status: {getRideStatusLabel(ride.status as any)}</p>
-                <p>Ride ID: {ride.rideId}</p>
-                <div className="button-stack">
-                  <button type="button" className="btn btn-ghost full-width" onClick={() => void updateRideStatus(ride.rideId, 'accepted').then(() => refreshRideStatus(ride.rideId))}>
-                    Accept ride
-                  </button>
-                  <button type="button" className="btn btn-ghost full-width" onClick={() => void updateRideStatus(ride.rideId, 'arriving').then(() => refreshRideStatus(ride.rideId))}>
-                    Driver arriving
-                  </button>
-                  <button type="button" className="btn btn-ghost full-width" onClick={() => void updateRideStatus(ride.rideId, 'on_trip').then(() => refreshRideStatus(ride.rideId))}>
-                    Start trip
-                  </button>
+              <div className="ride-status-card">
+                <div className="ride-status-header">
+                  <div>
+                    <p className="ride-status-label">{getRideStatusLabel(ride.status as any)}</p>
+                    <p className="ride-route">{ride.pickup} → {ride.dropoff}</p>
+                  </div>
+                  <div className="ride-fare-badge">₹{ride.fare}</div>
                 </div>
-                <ul>
-                  {rideProgress.map((step) => <li key={step}>{step}</li>)}
-                </ul>
+                <ol className="ride-timeline">
+                  {(['requested', 'accepted', 'arriving', 'on_trip', 'completed'] as const).map((step, i) => {
+                    const labels: Record<string, string> = {
+                      requested: 'Ride requested',
+                      accepted: 'Driver assigned',
+                      arriving: 'Driver arriving',
+                      on_trip: 'Trip in progress',
+                      completed: 'Trip completed'
+                    };
+                    const currentIndex = ['requested','accepted','arriving','on_trip','completed'].indexOf(ride.status);
+                    const isDone = i <= currentIndex;
+                    const isActive = i === currentIndex;
+                    return (
+                      <li key={step} className={`timeline-step${isDone ? ' done' : ''}${isActive ? ' active' : ''}`}>
+                        <span className="timeline-dot" />
+                        <span>{labels[step]}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {ride.status !== 'completed' && ride.status !== 'cancelled' && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost full-width"
+                    onClick={() => {
+                      void updateRideStatus(ride.rideId, 'cancelled').then(() => {
+                        setRide((r) => r ? { ...r, status: 'cancelled' } : r);
+                        if (pollRef.current) clearInterval(pollRef.current);
+                      });
+                    }}
+                  >
+                    Cancel ride
+                  </button>
+                )}
+                {(ride.status === 'completed' || ride.status === 'cancelled') && (
+                  <button
+                    type="button"
+                    className="btn btn-primary full-width"
+                    onClick={() => {
+                      setRide(null);
+                      setPickup('');
+                      setPickupRaw('');
+                      setDropoff('');
+                      setDropoffRaw('');
+                    }}
+                  >
+                    Book another ride
+                  </button>
+                )}
               </div>
             )}
           </aside>
