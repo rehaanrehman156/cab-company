@@ -208,12 +208,6 @@ function App() {
           <aside className="booking-card" aria-label="Ride estimator" id="ride-booking-form">
             <p className="booking-kicker">Quick Fare Estimator</p>
             <h3>Where are you heading?</h3>
-            <div className="fare-summary">
-              <p className="fare-label">Trip route</p>
-              <p className="fare-value" style={{ fontSize: '0.95rem', lineHeight: 1.5 }}>
-                {pickup || 'Pickup location'} → {dropoff || 'Drop-off location'}
-              </p>
-            </div>
             <form className="booking-form" onSubmit={handleBookRide}>
               <label htmlFor="pickup">Pickup</label>
               <div className="autocomplete-wrap">
