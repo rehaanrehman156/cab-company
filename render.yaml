@@ -10,3 +10,14 @@ services:
         value: production
       - key: PORT
         value: 5000
+
+  - type: web
+    name: cab-company-driver
+    runtime: node
+    buildCommand: cd frontend/driver-app && npm install && REACT_APP_API_BASE_URL=https://cab-company-backend.onrender.com npm run build
+    staticPublishPath: frontend/driver-app/build
+    plan: free
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

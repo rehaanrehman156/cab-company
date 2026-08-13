@@ -163,6 +163,38 @@ class RideRepository {
     await pool.execute("UPDATE rides SET status = ? WHERE id = ?", [status, rideId]);
     return this.getById(rideId);
   }
+
+  async getByStatus(status: RideStatus): Promise<Ride[]> {
+    const pool = this.getPool();
+
+    if (!pool) {
+      return Array.from(inMemoryRides.values()).filter((r) => r.status === status);
+    }
+
+    await this.ensureSchema(pool);
+    const [rows] = await pool.query<RideRow[]>(
+      "SELECT id, pickup, dropoff, fare, status, created_at FROM rides WHERE status = ? ORDER BY created_at ASC",
+      [status]
+    );
+    return rows.map((row) => this.rowToRide(row));
+  }
+
+  async getActiveRides(): Promise<Ride[]> {
+    const activeStatuses: RideStatus[] = ["accepted", "arriving", "on_trip"];
+    const pool = this.getPool();
+
+    if (!pool) {
+      return Array.from(inMemoryRides.values()).filter((r) => activeStatuses.includes(r.status));
+    }
+
+    await this.ensureSchema(pool);
+    const placeholders = activeStatuses.map(() => "?").join(", ");
+    const [rows] = await pool.query<RideRow[]>(
+      `SELECT id, pickup, dropoff, fare, status, created_at FROM rides WHERE status IN (${placeholders}) ORDER BY created_at ASC`,
+      activeStatuses
+    );
+    return rows.map((row) => this.rowToRide(row));
+  }
 }
 
 export const rideRepository = new RideRepository();
