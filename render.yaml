@@ -16,7 +16,6 @@ services:
     runtime: static
     buildCommand: cd frontend/driver-app && npm install && npm run build
     staticPublishPath: frontend/driver-app/build
-    plan: free
     envVars:
       - key: REACT_APP_API_BASE_URL
         value: https://cab-company-backend.onrender.com
