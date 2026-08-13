@@ -27,6 +27,21 @@ a { color: var(--muted); text-decoration: none; }
 a:hover { color: var(--text); }
 ol, ul { list-style: none; }
 
+/* ── auth screen ─────────────────────────────────────────────────────────── */
+.auth-page { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem 1.5rem; gap: 1.5rem; }
+.auth-logo { font-size: 1.5rem; font-weight: 800; display: flex; align-items: center; gap: 0.5rem; }
+.auth-heading { font-size: 1.5rem; font-weight: 800; text-align: center; }
+.auth-tabs { display: flex; background: #18181f; border-radius: 12px; padding: 4px; gap: 4px; width: 100%; max-width: 340px; }
+.auth-tab { flex: 1; padding: 0.6rem; border-radius: 9px; font-size: 0.88rem; font-weight: 700; background: transparent; color: #8a8a9a; transition: all 150ms; }
+.auth-tab.active { background: #22c55e; color: #fff; }
+.auth-form { display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 340px; }
+.auth-input { background: #1e1e28; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; color: #f0f0f4; font-family: inherit; font-size: 0.95rem; padding: 0.85rem 1rem; outline: none; width: 100%; }
+.auth-input::placeholder { color: #8a8a9a; }
+.auth-input:focus { border-color: #22c55e; }
+.auth-error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; border-radius: 10px; padding: 0.65rem 1rem; font-size: 0.85rem; }
+.home-user { font-size: 0.82rem; color: #8a8a9a; font-weight: 600; }
+.logout-btn { background: transparent; border: 1px solid rgba(255,255,255,0.1); color: #8a8a9a; border-radius: 8px; padding: 0.35rem 0.75rem; font-size: 0.8rem; }
+
 /* ── app shell ──────────────────────────────────────────────────────── */
 .app {
   min-height: 100dvh;

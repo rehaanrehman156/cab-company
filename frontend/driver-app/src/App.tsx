@@ -5,18 +5,33 @@ const API = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
 
 type RideStatus = 'requested' | 'accepted' | 'arriving' | 'on_trip' | 'completed' | 'cancelled';
 type Ride = { rideId: string; pickup: string; dropoff: string; fare: number; status: RideStatus; createdAt: string; };
+type User = { id: string; name: string; phone: string; role: string };
+type AuthMode = 'login' | 'register';
 
 const STATUS_NEXT: Partial<Record<RideStatus, RideStatus>> = { accepted: 'arriving', arriving: 'on_trip', on_trip: 'completed' };
 const STATUS_LABEL: Record<RideStatus, string> = { requested: 'Waiting for driver', accepted: 'Driver assigned', arriving: 'Driver arriving', on_trip: 'Trip in progress', completed: 'Trip completed', cancelled: 'Cancelled' };
 const ACTION_LABEL: Partial<Record<RideStatus, string>> = { accepted: 'I am arriving', arriving: 'Start trip', on_trip: 'Complete trip' };
 
 async function callApi(path: string, method = 'GET', body?: object) {
-  const res = await fetch(`${API}${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const token = localStorage.getItem('driverToken') || '';
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export default function DriverApp() {
+  const [user, setUser]             = useState<User | null>(() => { try { return JSON.parse(localStorage.getItem('driverUser') || 'null'); } catch { return null; } });
+  const [authMode, setAuthMode]     = useState<AuthMode>('login');
+  const [authName, setAuthName]     = useState('');
+  const [authPhone, setAuthPhone]   = useState('');
+  const [authPass, setAuthPass]     = useState('');
+  const [authVehicle, setAuthVehicle] = useState('');
+  const [authError, setAuthError]   = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
   const [pending, setPending] = useState<Ride[]>([]);
   const [active, setActive]   = useState<Ride | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
@@ -28,18 +43,20 @@ export default function DriverApp() {
   };
 
   useEffect(() => {
+    if (!user) return;
     fetchPending();
     const t = setInterval(fetchPending, 8000);
     return () => clearInterval(t);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (!active) return;
+    const rideId = active.rideId;
     pollRef.current = setInterval(async () => {
       try {
         const rides: Ride[] = await callApi('/rides/active');
-        const updated = rides.find((r) => r.rideId === active.rideId);
+        const updated = rides.find((r) => r.rideId === rideId);
         if (updated) {
           setActive(updated);
           if (updated.status === 'completed' || updated.status === 'cancelled') { setActive(null); fetchPending(); }
@@ -47,6 +64,7 @@ export default function DriverApp() {
       } catch { /* silent */ }
     }, 5000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.rideId]);
 
   const acceptRide = async (ride: Ride) => {
@@ -69,6 +87,62 @@ export default function DriverApp() {
     try { await callApi(`/rides/status/${active.rideId}`, 'PATCH', { status: 'cancelled' }); setActive(null); fetchPending(); }
     catch { setError('Failed to cancel.'); } finally { setLoading(null); }
   };
+
+  const handleLogout = () => {
+    localStorage.removeItem('driverToken');
+    localStorage.removeItem('driverUser');
+    setUser(null);
+  };
+
+  const handleAuth = async () => {
+    if (!authPhone || !authPass) { setAuthError('Phone and password are required.'); return; }
+    if (authMode === 'register' && (!authName || !authVehicle)) { setAuthError('Name and vehicle number are required.'); return; }
+    setAuthLoading(true); setAuthError(null);
+    try {
+      const endpoint = authMode === 'login' ? '/auth/login' : '/auth/driver/register';
+      const body = authMode === 'login'
+        ? { phone: authPhone, password: authPass }
+        : { name: authName, phone: authPhone, password: authPass, vehicleNumber: authVehicle, vehicleType: 'mini' };
+      const res = await fetch(`${API}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) { setAuthError(data.error || 'Something went wrong.'); return; }
+      if (data.user.role !== 'driver') { setAuthError('This account is not a driver account.'); return; }
+      localStorage.setItem('driverToken', data.token);
+      localStorage.setItem('driverUser', JSON.stringify(data.user));
+      setUser(data.user);
+    } catch { setAuthError('Could not connect to server.'); }
+    finally { setAuthLoading(false); }
+  };
+
+  /* auth screen */
+  if (!user) {
+    return (
+      <div className="driver-app">
+        <div className="auth-page">
+          <div className="auth-logo">🚕 <span>Driver Portal</span></div>
+          <h2 className="auth-heading">{authMode === 'login' ? 'Driver login' : 'Register as driver'}</h2>
+          <div className="auth-tabs">
+            <button className={`auth-tab${authMode === 'login' ? ' active' : ''}`} onClick={() => { setAuthMode('login'); setAuthError(null); }}>Login</button>
+            <button className={`auth-tab${authMode === 'register' ? ' active' : ''}`} onClick={() => { setAuthMode('register'); setAuthError(null); }}>Register</button>
+          </div>
+          <div className="auth-form">
+            {authMode === 'register' && (
+              <>
+                <input className="auth-input" type="text" placeholder="Your name" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+                <input className="auth-input" type="text" placeholder="Vehicle number (e.g. MH01AB1234)" value={authVehicle} onChange={(e) => setAuthVehicle(e.target.value)} />
+              </>
+            )}
+            <input className="auth-input" type="tel" placeholder="Phone number" value={authPhone} onChange={(e) => setAuthPhone(e.target.value)} />
+            <input className="auth-input" type="password" placeholder="Password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} />
+            {authError && <p className="auth-error">{authError}</p>}
+            <button className="driver-btn primary" onClick={handleAuth} disabled={authLoading}>
+              {authLoading ? 'Please wait…' : authMode === 'login' ? 'Login' : 'Register'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (active) {
     const nextAction = ACTION_LABEL[active.status];
@@ -105,7 +179,11 @@ export default function DriverApp() {
     <div className="driver-app">
       <header className="driver-bar">
         <span className="driver-logo">🚕 Driver Dashboard</span>
-        <button className="refresh-btn" onClick={fetchPending}>↻ Refresh</button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {user && <span style={{ fontSize: '0.8rem', color: '#8a8a9a' }}>{user.name}</span>}
+          <button className="refresh-btn" onClick={fetchPending}>↻</button>
+          <button className="refresh-btn" onClick={handleLogout}>Logout</button>
+        </div>
       </header>
       <div className="pending-page">
         <p className="pending-title">{pending.length === 0 ? 'No ride requests right now' : `${pending.length} ride request${pending.length > 1 ? 's' : ''} waiting`}</p>

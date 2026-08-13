@@ -4,5 +4,5 @@ import App from './App';
 
 test('renders driver dashboard', () => {
   render(<App />);
-  expect(screen.getByText(/driver dashboard/i)).toBeInTheDocument();
+  expect(screen.getByText(/driver login/i)).toBeInTheDocument();
 });

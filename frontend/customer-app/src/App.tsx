@@ -5,9 +5,14 @@ import { bookRide, getRideStatus, updateRideStatus } from './Services/rides';
 import { formatLocationLabel } from './Utils/location';
 import { getRideStatusLabel } from './Utils/rideProgress';
 
+const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
+
 /* ─── types ─────────────────────────────────────────────────────────────── */
 type RideType = 'mini' | 'sedan' | 'suv';
-type Screen   = 'home' | 'booking' | 'tracking';
+type Screen   = 'auth' | 'home' | 'booking' | 'tracking';
+type AuthMode = 'login' | 'register';
+
+type User = { id: string; name: string; phone: string; role: string };
 
 type PlaceSuggestion = {
   place_id: number;
@@ -88,7 +93,14 @@ function LocationInput({ id, raw, value, icon, placeholder, onChange, onSelect, 
 
 /* ─── main app ───────────────────────────────────────────────────────────── */
 export default function App() {
-  const [screen, setScreen]         = useState<Screen>('home');
+  const [screen, setScreen]         = useState<Screen>(() => localStorage.getItem('authToken') ? 'home' : 'auth');
+  const [user, setUser]             = useState<User | null>(() => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } });
+  const [authMode, setAuthMode]     = useState<AuthMode>('login');
+  const [authName, setAuthName]     = useState('');
+  const [authPhone, setAuthPhone]   = useState('');
+  const [authPass, setAuthPass]     = useState('');
+  const [authError, setAuthError]   = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
   const [pickup, setPickup]         = useState('');
   const [pickupRaw, setPickupRaw]   = useState('');
   const [dropoff, setDropoff]       = useState('');
@@ -172,6 +184,33 @@ export default function App() {
     setRide(null); setPickup(''); setPickupRaw('');
     setDropoff(''); setDropoffRaw(''); setError(null);
     setScreen('home');
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('user');
+    setUser(null);
+    setScreen('auth');
+  };
+
+  const handleAuth = async () => {
+    if (!authPhone || !authPass) { setAuthError('Phone and password are required.'); return; }
+    if (authMode === 'register' && !authName) { setAuthError('Name is required.'); return; }
+    setAuthLoading(true); setAuthError(null);
+    try {
+      const endpoint = authMode === 'login' ? '/auth/login' : '/auth/register';
+      const body = authMode === 'login'
+        ? { phone: authPhone, password: authPass }
+        : { name: authName, phone: authPhone, password: authPass };
+      const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) { setAuthError(data.error || 'Something went wrong.'); return; }
+      localStorage.setItem('authToken', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+      setScreen('home');
+    } catch { setAuthError('Could not connect to server.'); }
+    finally { setAuthLoading(false); }
   };
 
   /* ── tracking screen ──────────────────────────────────────────────────── */
@@ -297,6 +336,36 @@ export default function App() {
     );
   }
 
+  /* ── auth screen ───────────────────────────────────────────────────────── */
+  if (screen === 'auth') {
+    return (
+      <div className="app">
+        <div className="auth-page">
+          <div className="auth-logo">🚕 <span>CabCo</span></div>
+          <h2 className="auth-heading">{authMode === 'login' ? 'Welcome back' : 'Create account'}</h2>
+
+          <div className="auth-tabs">
+            <button className={`auth-tab${authMode === 'login' ? ' active' : ''}`} onClick={() => { setAuthMode('login'); setAuthError(null); }}>Login</button>
+            <button className={`auth-tab${authMode === 'register' ? ' active' : ''}`} onClick={() => { setAuthMode('register'); setAuthError(null); }}>Sign up</button>
+          </div>
+
+          <div className="auth-form">
+            {authMode === 'register' && (
+              <input className="auth-input" type="text" placeholder="Your name" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+            )}
+            <input className="auth-input" type="tel" placeholder="Phone number (e.g. 9876543210)" value={authPhone} onChange={(e) => setAuthPhone(e.target.value)} />
+            <input className="auth-input" type="password" placeholder="Password" value={authPass} onChange={(e) => setAuthPass(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
+            {authError && <p className="auth-error">{authError}</p>}
+            <button className="btn-primary" onClick={handleAuth} disabled={authLoading}>
+              {authLoading ? 'Please wait…' : authMode === 'login' ? 'Login' : 'Create account'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   /* ── home screen ──────────────────────────────────────────────────────── */
   return (
     <div className="app home">
@@ -305,10 +374,10 @@ export default function App() {
           <span className="logo-icon">🚕</span>
           <span className="logo-text">CabCo</span>
         </div>
-        <nav className="home-nav">
-          <a href="#services">Services</a>
-          <a href="#about">About</a>
-        </nav>
+        <div className="home-nav">
+          {user && <span className="home-user">Hi, {user.name.split(' ')[0]}</span>}
+          <button className="logout-btn" onClick={handleLogout}>Logout</button>
+        </div>
       </header>
 
       <section className="hero">

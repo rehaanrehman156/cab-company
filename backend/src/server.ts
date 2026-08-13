@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth";
 import rideRoutes from "./routes/rides";
 import { loadRuntimeSecretsFromAws } from "./config/runtimeSecrets";
 import { initializeSocketServer } from "./realtime/socket";
+import { ensureSchema } from "./config/db";
 
 async function bootstrap(): Promise<void> {
   const requireRuntimeSecrets = process.env.REQUIRE_RUNTIME_SECRETS === "true";
@@ -24,6 +25,16 @@ async function bootstrap(): Promise<void> {
   const app = express();
   app.use(cors());
   app.use(express.json());
+
+  // Run DB migrations
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureSchema();
+      console.log("Database schema ready.");
+    } catch (err) {
+      console.error("Failed to ensure DB schema:", err);
+    }
+  }
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
