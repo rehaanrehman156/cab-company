@@ -2,14 +2,33 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { getDb } from "../config/db";
 import { signToken } from "../middleware/auth";
+import { sendOtp, verifyOtp } from "../services/otp";
 
 const router = Router();
 
-// Customer register
+// Step 1: Send OTP to phone before registration
+router.post("/send-otp", async (req, res) => {
+  const { phone } = req.body;
+  if (!phone || !/^\d{10}$/.test(phone)) {
+    return res.status(400).json({ error: "A valid 10-digit phone number is required" });
+  }
+  try {
+    await sendOtp(phone);
+    return res.json({ message: "OTP sent" });
+  } catch (error) {
+    console.error("OTP send error", error);
+    return res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
+
+// Customer register (requires OTP verification)
 router.post("/register", async (req, res) => {
-  const { name, phone, password } = req.body;
-  if (!name || !phone || !password) {
-    return res.status(400).json({ error: "name, phone and password are required" });
+  const { name, phone, password, otp } = req.body;
+  if (!name || !phone || !password || !otp) {
+    return res.status(400).json({ error: "name, phone, password and otp are required" });
+  }
+  if (!verifyOtp(phone, otp)) {
+    return res.status(400).json({ error: "Invalid or expired OTP" });
   }
   try {
     const db = getDb();
@@ -57,11 +76,14 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// Driver register
+// Driver register (requires OTP verification)
 router.post("/driver/register", async (req, res) => {
-  const { name, phone, password, vehicleNumber, vehicleType } = req.body;
-  if (!name || !phone || !password || !vehicleNumber) {
-    return res.status(400).json({ error: "name, phone, password and vehicleNumber are required" });
+  const { name, phone, password, vehicleNumber, vehicleType, otp } = req.body;
+  if (!name || !phone || !password || !vehicleNumber || !otp) {
+    return res.status(400).json({ error: "name, phone, password, vehicleNumber and otp are required" });
+  }
+  if (!verifyOtp(phone, otp)) {
+    return res.status(400).json({ error: "Invalid or expired OTP" });
   }
   try {
     const db = getDb();

@@ -9,14 +9,17 @@ const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
 
 /* ─── types ─────────────────────────────────────────────────────────────── */
 type RideType = 'mini' | 'sedan' | 'suv';
-type Screen   = 'auth' | 'home' | 'booking' | 'tracking';
+type Screen   = 'auth' | 'home' | 'booking' | 'tracking' | 'privacy';
 type AuthMode = 'login' | 'register';
+type AuthStep = 'form' | 'otp';
 
 type User = { id: string; name: string; phone: string; role: string };
 
 type PlaceSuggestion = {
   place_id: number;
   display_name: string;
+  lat: string;
+  lon: string;
 };
 
 const RIDE_OPTIONS: { type: RideType; label: string; icon: string; seats: string; eta: string; base: number }[] = [
@@ -60,7 +63,8 @@ function usePlaceAutocomplete(query: string) {
 /* ─── location input component ──────────────────────────────────────────── */
 function LocationInput({ id, raw, value, icon, placeholder, onChange, onSelect, suggestions, onClear }: {
   id: string; raw: string; value: string; icon: string; placeholder: string;
-  onChange: (v: string) => void; onSelect: (l: string) => void;
+  onChange: (v: string) => void;
+  onSelect: (l: string, lat: string, lon: string) => void;
   suggestions: PlaceSuggestion[]; onClear: () => void;
 }) {
   return (
@@ -79,7 +83,7 @@ function LocationInput({ id, raw, value, icon, placeholder, onChange, onSelect, 
               const label = s.display_name.split(',').slice(0, 3).join(', ');
               return (
                 <li key={s.place_id} className="sug-item"
-                  onMouseDown={() => { onSelect(label); onClear(); }}>
+                  onMouseDown={() => { onSelect(label, s.lat, s.lon); onClear(); }}>
                   📍 {label}
                 </li>
               );
@@ -96,19 +100,25 @@ export default function App() {
   const [screen, setScreen]         = useState<Screen>(() => localStorage.getItem('authToken') ? 'home' : 'auth');
   const [user, setUser]             = useState<User | null>(() => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } });
   const [authMode, setAuthMode]     = useState<AuthMode>('login');
+  const [authStep, setAuthStep]     = useState<AuthStep>('form');
   const [authName, setAuthName]     = useState('');
   const [authPhone, setAuthPhone]   = useState('');
   const [authPass, setAuthPass]     = useState('');
+  const [authOtp, setAuthOtp]       = useState('');
   const [authError, setAuthError]   = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [pickup, setPickup]         = useState('');
   const [pickupRaw, setPickupRaw]   = useState('');
+  const [pickupCoords, setPickupCoords] = useState<{ lat: string; lon: string } | null>(null);
   const [dropoff, setDropoff]       = useState('');
   const [dropoffRaw, setDropoffRaw] = useState('');
+  const [dropoffCoords, setDropoffCoords] = useState<{ lat: string; lon: string } | null>(null);
   const [rideType, setRideType]     = useState<RideType>('mini');
   const [loading, setLoading]       = useState(false);
   const [locating, setLocating]     = useState(false);
   const [error, setError]           = useState<string | null>(null);
+  const [fare, setFare]             = useState<number | null>(null);
+  const [fareLoading, setFareLoading] = useState(false);
   const [ride, setRide] = useState<{
     rideId: string; pickup: string; dropoff: string; fare: number; status: string;
   } | null>(null);
@@ -117,8 +127,24 @@ export default function App() {
   const pickupAC  = usePlaceAutocomplete(pickupRaw);
   const dropoffAC = usePlaceAutocomplete(dropoffRaw);
 
-  const selected = RIDE_OPTIONS.find((o) => o.type === rideType)!;
-  const fare = selected.base + 12;
+  // Fetch real fare from backend when both coords are available
+  useEffect(() => {
+    if (!pickupCoords || !dropoffCoords) return;
+    setFareLoading(true);
+    fetch(`${API_BASE}/rides/estimate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pickupLat: pickupCoords.lat, pickupLon: pickupCoords.lon,
+        dropoffLat: dropoffCoords.lat, dropoffLon: dropoffCoords.lon,
+        vehicleType: rideType,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => { if (data.fare) setFare(data.fare); })
+      .catch(() => {})
+      .finally(() => setFareLoading(false));
+  }, [pickupCoords, dropoffCoords, rideType]);
 
   const handleUseLocation = () => {
     if (!('geolocation' in navigator)) { setError('Geolocation not available.'); return; }
@@ -128,6 +154,7 @@ export default function App() {
         const { latitude: lat, longitude: lon } = pos.coords;
         const fallback = formatLocationLabel(lat, lon);
         setPickup(fallback); setPickupRaw(fallback);
+        setPickupCoords({ lat: String(lat), lon: String(lon) });
         try {
           const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
           const data = await res.json();
@@ -163,9 +190,10 @@ export default function App() {
     if (!pickup || !dropoff) { setError('Please select both pickup and drop-off.'); return; }
     setLoading(true); setError(null);
     try {
-      const res    = await bookRide(pickup, dropoff);
+      const res = await bookRide(pickup, dropoff, pickupCoords?.lat, pickupCoords?.lon, dropoffCoords?.lat, dropoffCoords?.lon, rideType);
       const booked = res.data;
       setRide(booked);
+      setFare(booked.fare);
       setScreen('tracking');
       startPolling(booked.rideId);
     } catch (e: any) {
@@ -181,8 +209,9 @@ export default function App() {
   };
 
   const resetAll = () => {
-    setRide(null); setPickup(''); setPickupRaw('');
-    setDropoff(''); setDropoffRaw(''); setError(null);
+    setRide(null); setPickup(''); setPickupRaw(''); setPickupCoords(null);
+    setDropoff(''); setDropoffRaw(''); setDropoffCoords(null);
+    setFare(null); setError(null);
     setScreen('home');
   };
 
@@ -194,21 +223,42 @@ export default function App() {
   };
 
   const handleAuth = async () => {
+    if (authStep === 'otp') {
+      // Verify OTP and complete registration
+      if (!authOtp) { setAuthError('Enter the OTP sent to your phone.'); return; }
+      setAuthLoading(true); setAuthError(null);
+      try {
+        const res = await fetch(`${API_BASE}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: authName, phone: authPhone, password: authPass, otp: authOtp }) });
+        const data = await res.json();
+        if (!res.ok) { setAuthError(data.error || 'Registration failed.'); return; }
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setUser(data.user);
+        setScreen('home');
+      } catch { setAuthError('Could not connect to server.'); }
+      finally { setAuthLoading(false); }
+      return;
+    }
+
     if (!authPhone || !authPass) { setAuthError('Phone and password are required.'); return; }
     if (authMode === 'register' && !authName) { setAuthError('Name is required.'); return; }
     setAuthLoading(true); setAuthError(null);
     try {
-      const endpoint = authMode === 'login' ? '/auth/login' : '/auth/register';
-      const body = authMode === 'login'
-        ? { phone: authPhone, password: authPass }
-        : { name: authName, phone: authPhone, password: authPass };
-      const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (!res.ok) { setAuthError(data.error || 'Something went wrong.'); return; }
-      localStorage.setItem('authToken', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      setUser(data.user);
-      setScreen('home');
+      if (authMode === 'register') {
+        // Send OTP first
+        const res = await fetch(`${API_BASE}/auth/send-otp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: authPhone }) });
+        const data = await res.json();
+        if (!res.ok) { setAuthError(data.error || 'Failed to send OTP.'); return; }
+        setAuthStep('otp');
+      } else {
+        const res = await fetch(`${API_BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: authPhone, password: authPass }) });
+        const data = await res.json();
+        if (!res.ok) { setAuthError(data.error || 'Login failed.'); return; }
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setUser(data.user);
+        setScreen('home');
+      }
     } catch { setAuthError('Could not connect to server.'); }
     finally { setAuthLoading(false); }
   };
@@ -281,16 +331,16 @@ export default function App() {
             <LocationInput
               id="pickup" raw={pickupRaw} value={pickup} icon="green"
               placeholder="Pickup location"
-              onChange={(v) => { setPickupRaw(v); setPickup(''); }}
-              onSelect={(l) => { setPickup(l); setPickupRaw(l); pickupAC.clear(); }}
+              onChange={(v) => { setPickupRaw(v); setPickup(''); setPickupCoords(null); }}
+              onSelect={(l, lat, lon) => { setPickup(l); setPickupRaw(l); setPickupCoords({ lat, lon }); pickupAC.clear(); }}
               suggestions={pickupAC.suggestions} onClear={pickupAC.clear}
             />
             <div className="loc-sep" />
             <LocationInput
               id="dropoff" raw={dropoffRaw} value={dropoff} icon="red"
               placeholder="Drop-off location"
-              onChange={(v) => { setDropoffRaw(v); setDropoff(''); }}
-              onSelect={(l) => { setDropoff(l); setDropoffRaw(l); dropoffAC.clear(); }}
+              onChange={(v) => { setDropoffRaw(v); setDropoff(''); setDropoffCoords(null); }}
+              onSelect={(l, lat, lon) => { setDropoff(l); setDropoffRaw(l); setDropoffCoords({ lat, lon }); dropoffAC.clear(); }}
               suggestions={dropoffAC.suggestions} onClear={dropoffAC.clear}
             />
           </div>
@@ -311,7 +361,6 @@ export default function App() {
                 <span className="rc-name">{opt.label}</span>
                 <span className="rc-seats">{opt.seats} seats</span>
                 <span className="rc-eta">{opt.eta}</span>
-                <span className="rc-fare">₹{opt.base + 12}</span>
               </button>
             ))}
           </div>
@@ -320,8 +369,8 @@ export default function App() {
 
           <div className="confirm-bar">
             <div className="confirm-fare">
-              <span className="cf-label">Estimated</span>
-              <span className="cf-value">₹{fare}</span>
+              <span className="cf-label">Estimated fare</span>
+              <span className="cf-value">{fareLoading ? '...' : fare ? `₹${fare}` : '--'}</span>
             </div>
             <button
               className="btn-primary"
@@ -342,25 +391,71 @@ export default function App() {
       <div className="app">
         <div className="auth-page">
           <div className="auth-logo">🚕 <span>CabCo</span></div>
-          <h2 className="auth-heading">{authMode === 'login' ? 'Welcome back' : 'Create account'}</h2>
+          <h2 className="auth-heading">{authStep === 'otp' ? 'Verify your number' : authMode === 'login' ? 'Welcome back' : 'Create account'}</h2>
 
-          <div className="auth-tabs">
-            <button className={`auth-tab${authMode === 'login' ? ' active' : ''}`} onClick={() => { setAuthMode('login'); setAuthError(null); }}>Login</button>
-            <button className={`auth-tab${authMode === 'register' ? ' active' : ''}`} onClick={() => { setAuthMode('register'); setAuthError(null); }}>Sign up</button>
-          </div>
+          {authStep !== 'otp' && (
+            <div className="auth-tabs">
+              <button className={`auth-tab${authMode === 'login' ? ' active' : ''}`} onClick={() => { setAuthMode('login'); setAuthError(null); }}>Login</button>
+              <button className={`auth-tab${authMode === 'register' ? ' active' : ''}`} onClick={() => { setAuthMode('register'); setAuthError(null); }}>Sign up</button>
+            </div>
+          )}
 
           <div className="auth-form">
-            {authMode === 'register' && (
-              <input className="auth-input" type="text" placeholder="Your name" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+            {authStep === 'otp' ? (
+              <>
+                <p style={{ fontSize: '0.88rem', color: '#8a8a9a', textAlign: 'center' }}>OTP sent to +91 {authPhone}</p>
+                <input className="auth-input" type="number" placeholder="Enter 6-digit OTP" value={authOtp}
+                  onChange={(e) => setAuthOtp(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
+                <button className="btn-primary" onClick={handleAuth} disabled={authLoading}>{authLoading ? 'Verifying…' : 'Verify OTP'}</button>
+                <button style={{ background: 'none', color: '#8a8a9a', fontSize: '0.85rem' }} onClick={() => { setAuthStep('form'); setAuthOtp(''); setAuthError(null); }}>Change number</button>
+              </>
+            ) : (
+              <>
+                {authMode === 'register' && (
+                  <input className="auth-input" type="text" placeholder="Your full name" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+                )}
+                <input className="auth-input" type="tel" placeholder="Phone number (10 digits)" value={authPhone} onChange={(e) => setAuthPhone(e.target.value)} />
+                <input className="auth-input" type="password" placeholder="Password" value={authPass} onChange={(e) => setAuthPass(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
+                <button className="btn-primary" onClick={handleAuth} disabled={authLoading}>
+                  {authLoading ? 'Please wait…' : authMode === 'login' ? 'Login' : 'Send OTP'}
+                </button>
+              </>
             )}
-            <input className="auth-input" type="tel" placeholder="Phone number (e.g. 9876543210)" value={authPhone} onChange={(e) => setAuthPhone(e.target.value)} />
-            <input className="auth-input" type="password" placeholder="Password" value={authPass} onChange={(e) => setAuthPass(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
             {authError && <p className="auth-error">{authError}</p>}
-            <button className="btn-primary" onClick={handleAuth} disabled={authLoading}>
-              {authLoading ? 'Please wait…' : authMode === 'login' ? 'Login' : 'Create account'}
-            </button>
+            <button style={{ background: 'none', color: '#8a8a9a', fontSize: '0.8rem', marginTop: '0.5rem' }} onClick={() => setScreen('privacy')}>Privacy Policy</button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── privacy policy screen ──────────────────────────────────────────────── */
+  if (screen === 'privacy') {
+    return (
+      <div className="app">
+        <header className="app-bar">
+          <button className="back-btn" onClick={() => setScreen(user ? 'home' : 'auth')}>←</button>
+          <span className="app-bar-title">Privacy Policy</span>
+          <span />
+        </header>
+        <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, lineHeight: 1.7, color: '#c0c0cc', fontSize: '0.9rem' }}>
+          <h2 style={{ color: '#f0f0f4', marginBottom: '1rem' }}>Privacy Policy</h2>
+          <p><strong style={{ color: '#f0f0f4' }}>Last updated: August 2026</strong></p><br />
+          <p>CabCo ("we", "us", "our") operates the CabCo cab booking service. This policy explains how we collect, use and protect your information.</p><br />
+          <h3 style={{ color: '#f0f0f4' }}>Information We Collect</h3>
+          <p>We collect your name, phone number, and trip details (pickup and drop-off locations) when you register and book rides.</p><br />
+          <h3 style={{ color: '#f0f0f4' }}>How We Use Your Information</h3>
+          <p>We use your information to provide cab booking services, match you with drivers, and improve our service.</p><br />
+          <h3 style={{ color: '#f0f0f4' }}>Location Data</h3>
+          <p>We access your device location only when you use "Use my location" to set your pickup point. We do not track your location in the background.</p><br />
+          <h3 style={{ color: '#f0f0f4' }}>Data Sharing</h3>
+          <p>We share your name and phone with your assigned driver to enable the trip. We do not sell your data to third parties.</p><br />
+          <h3 style={{ color: '#f0f0f4' }}>Data Retention</h3>
+          <p>We retain your account and trip history for 2 years. You may request deletion by contacting support.</p><br />
+          <h3 style={{ color: '#f0f0f4' }}>Contact</h3>
+          <p>For questions, contact us at support@cabco.in</p>
         </div>
       </div>
     );

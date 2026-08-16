@@ -2,22 +2,42 @@ import { Router } from "express";
 import { rideRepository } from "../data/rideRepository";
 import { emitDriverLocationUpdated, emitRideCreated, emitRideStatusChanged } from "../realtime/socket";
 import { RideStatus } from "../types";
+import { calculateFare } from "../services/fare";
 
 const router = Router();
 
 const validStatuses: RideStatus[] = ["requested", "accepted", "arriving", "on_trip", "completed", "cancelled"];
 
+// Estimate fare before booking
+router.post("/estimate", (req, res) => {
+  const { pickupLat, pickupLon, dropoffLat, dropoffLon, vehicleType } = req.body;
+  if (!pickupLat || !pickupLon || !dropoffLat || !dropoffLon) {
+    return res.status(400).json({ error: "pickupLat, pickupLon, dropoffLat, dropoffLon are required" });
+  }
+  const result = calculateFare(
+    Number(pickupLat), Number(pickupLon),
+    Number(dropoffLat), Number(dropoffLon),
+    vehicleType || "mini"
+  );
+  return res.json(result);
+});
+
 router.post("/book", async (req, res) => {
-  const { pickup, dropoff } = req.body;
+  const { pickup, dropoff, pickupLat, pickupLon, dropoffLat, dropoffLon, vehicleType } = req.body;
 
   if (!pickup || !dropoff) {
     return res.status(400).json({ error: "pickup and dropoff are required" });
   }
 
-  const ride = await rideRepository.createRide(String(pickup), String(dropoff));
+  let fare = 150;
+  if (pickupLat && pickupLon && dropoffLat && dropoffLon) {
+    const result = calculateFare(Number(pickupLat), Number(pickupLon), Number(dropoffLat), Number(dropoffLon), vehicleType || "mini");
+    fare = result.fare;
+  }
+
+  const ride = await rideRepository.createRide(String(pickup), String(dropoff), fare);
   emitRideCreated(ride);
   emitRideStatusChanged(ride);
-  // No auto-progression — status advances only when driver acts
   return res.status(201).json(ride);
 });
 
