@@ -1,0 +1,14 @@
+{
+  "appId": "com.cabco.customer",
+  "appName": "CabCo",
+  "webDir": "build",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "buildOptions": {
+      "keystorePath": null,
+      "keystoreAlias": null
+    }
+  }
+}
