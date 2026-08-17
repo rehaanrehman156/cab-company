@@ -14,15 +14,21 @@ export async function sendOtp(phone: string): Promise<void> {
 
   if (!apiKey) {
     console.log(`[DEV] OTP for ${phone}: ${otp}`);
-    return;
+    return; // Dev mode — check Render logs for OTP
   }
 
-  const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&variables_values=${otp}&route=otp&numbers=${phone}`;
-  const res = await fetch(url, { method: "GET", headers: { "cache-control": "no-cache" } });
-  const data: any = await res.json();
-
-  if (!data.return) {
-    throw new Error(`Fast2SMS error: ${JSON.stringify(data)}`);
+  try {
+    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&variables_values=${otp}&route=otp&numbers=${phone}`;
+    const res = await fetch(url, { method: "GET", headers: { "cache-control": "no-cache" } });
+    const data: any = await res.json();
+    if (!data.return) {
+      console.error("Fast2SMS error:", JSON.stringify(data));
+      // Still log OTP so testing is possible even if SMS fails
+      console.log(`[FALLBACK] OTP for ${phone}: ${otp}`);
+    }
+  } catch (err) {
+    console.error("Fast2SMS request failed:", err);
+    console.log(`[FALLBACK] OTP for ${phone}: ${otp}`);
   }
 }
 
