@@ -22,7 +22,7 @@ export async function ensureSchema(): Promise<void> {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name VARCHAR(128) NOT NULL,
       phone VARCHAR(20) UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT NOT NULL DEFAULT '',
       role VARCHAR(16) NOT NULL DEFAULT 'customer',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );

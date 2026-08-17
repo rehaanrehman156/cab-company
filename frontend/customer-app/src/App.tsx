@@ -10,8 +10,7 @@ const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
 /* ─── types ─────────────────────────────────────────────────────────────── */
 type RideType = 'mini' | 'sedan' | 'suv';
 type Screen   = 'auth' | 'home' | 'booking' | 'tracking' | 'privacy';
-type AuthMode = 'login' | 'register';
-type AuthStep = 'form' | 'otp';
+type AuthStep = 'phone' | 'otp' | 'name';
 
 type User = { id: string; name: string; phone: string; role: string };
 
@@ -99,12 +98,10 @@ function LocationInput({ id, raw, value, icon, placeholder, onChange, onSelect, 
 export default function App() {
   const [screen, setScreen]         = useState<Screen>(() => localStorage.getItem('authToken') ? 'home' : 'auth');
   const [user, setUser]             = useState<User | null>(() => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } });
-  const [authMode, setAuthMode]     = useState<AuthMode>('login');
-  const [authStep, setAuthStep]     = useState<AuthStep>('form');
-  const [authName, setAuthName]     = useState('');
+  const [authStep, setAuthStep]     = useState<AuthStep>('phone');
   const [authPhone, setAuthPhone]   = useState('');
-  const [authPass, setAuthPass]     = useState('');
   const [authOtp, setAuthOtp]       = useState('');
+  const [authName, setAuthName]     = useState('');
   const [authError, setAuthError]   = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [pickup, setPickup]         = useState('');
@@ -223,44 +220,79 @@ export default function App() {
   };
 
   const handleAuth = async () => {
-    if (authStep === 'otp') {
-      // Verify OTP and complete registration
-      if (!authOtp) { setAuthError('Enter the OTP sent to your phone.'); return; }
-      setAuthLoading(true); setAuthError(null);
+    setAuthError(null);
+
+    // Step 1: Send OTP
+    if (authStep === 'phone') {
+      if (!authPhone || authPhone.length !== 10 || !/^\d{10}$/.test(authPhone)) {
+        setAuthError('Enter a valid 10-digit mobile number.');
+        return;
+      }
+      setAuthLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: authName, phone: authPhone, password: authPass, otp: authOtp }) });
+        const res = await fetch(`${API_BASE}/auth/send-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: authPhone }),
+        });
         const data = await res.json();
-        if (!res.ok) { setAuthError(data.error || 'Registration failed.'); return; }
+        if (!res.ok) { setAuthError(data.error || 'Failed to send OTP.'); return; }
+        setAuthStep('otp');
+      } catch { setAuthError('Could not connect to server. Please check your internet.'); }
+      finally { setAuthLoading(false); }
+      return;
+    }
+
+    // Step 2: Verify OTP
+    if (authStep === 'otp') {
+      if (!authOtp || authOtp.length !== 6) { setAuthError('Enter the 6-digit OTP sent to your phone.'); return; }
+      setAuthLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: authPhone, otp: authOtp, name: authName || undefined }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          if (data.error === 'name_required') { setAuthStep('name'); setAuthError(null); return; }
+          setAuthError(data.error || 'Invalid OTP.');
+          return;
+        }
+        if (data.isNewUser && !authName) { setAuthStep('name'); return; }
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setUser(data.user);
+        setScreen('home');
+      } catch { setAuthError('Could not connect to server. Please check your internet.'); }
+      finally { setAuthLoading(false); }
+      return;
+    }
+
+    // Step 3: Enter name (new users only)
+    if (authStep === 'name') {
+      if (!authName.trim()) { setAuthError('Please enter your name.'); return; }
+      setAuthLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: authPhone, otp: authOtp, name: authName }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          // OTP expired — go back to start
+          setAuthStep('phone'); setAuthOtp(''); setAuthName('');
+          setAuthError('OTP expired. Please request a new one.');
+          return;
+        }
         localStorage.setItem('authToken', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
         setUser(data.user);
         setScreen('home');
       } catch { setAuthError('Could not connect to server.'); }
       finally { setAuthLoading(false); }
-      return;
     }
-
-    if (!authPhone || !authPass) { setAuthError('Phone and password are required.'); return; }
-    if (authMode === 'register' && !authName) { setAuthError('Name is required.'); return; }
-    setAuthLoading(true); setAuthError(null);
-    try {
-      if (authMode === 'register') {
-        // Send OTP first
-        const res = await fetch(`${API_BASE}/auth/send-otp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: authPhone }) });
-        const data = await res.json();
-        if (!res.ok) { setAuthError(data.error || 'Failed to send OTP.'); return; }
-        setAuthStep('otp');
-      } else {
-        const res = await fetch(`${API_BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: authPhone, password: authPass }) });
-        const data = await res.json();
-        if (!res.ok) { setAuthError(data.error || 'Login failed.'); return; }
-        localStorage.setItem('authToken', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
-        setUser(data.user);
-        setScreen('home');
-      }
-    } catch { setAuthError('Could not connect to server.'); }
-    finally { setAuthLoading(false); }
   };
 
   /* ── tracking screen ──────────────────────────────────────────────────── */
@@ -387,42 +419,62 @@ export default function App() {
 
   /* ── auth screen ───────────────────────────────────────────────────────── */
   if (screen === 'auth') {
+    const headings: Record<AuthStep, string> = {
+      phone: 'Enter your mobile number',
+      otp:   'Enter the OTP',
+      name:  'What\'s your name?',
+    };
     return (
       <div className="app">
         <div className="auth-page">
           <div className="auth-logo">🚕 <span>CabCo</span></div>
-          <h2 className="auth-heading">{authStep === 'otp' ? 'Verify your number' : authMode === 'login' ? 'Welcome back' : 'Create account'}</h2>
-
-          {authStep !== 'otp' && (
-            <div className="auth-tabs">
-              <button className={`auth-tab${authMode === 'login' ? ' active' : ''}`} onClick={() => { setAuthMode('login'); setAuthError(null); }}>Login</button>
-              <button className={`auth-tab${authMode === 'register' ? ' active' : ''}`} onClick={() => { setAuthMode('register'); setAuthError(null); }}>Sign up</button>
-            </div>
-          )}
+          <h2 className="auth-heading">{headings[authStep]}</h2>
 
           <div className="auth-form">
-            {authStep === 'otp' ? (
+            {authStep === 'phone' && (
               <>
-                <p style={{ fontSize: '0.88rem', color: '#8a8a9a', textAlign: 'center' }}>OTP sent to +91 {authPhone}</p>
-                <input className="auth-input" type="number" placeholder="Enter 6-digit OTP" value={authOtp}
-                  onChange={(e) => setAuthOtp(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
-                <button className="btn-primary" onClick={handleAuth} disabled={authLoading}>{authLoading ? 'Verifying…' : 'Verify OTP'}</button>
-                <button style={{ background: 'none', color: '#8a8a9a', fontSize: '0.85rem' }} onClick={() => { setAuthStep('form'); setAuthOtp(''); setAuthError(null); }}>Change number</button>
-              </>
-            ) : (
-              <>
-                {authMode === 'register' && (
-                  <input className="auth-input" type="text" placeholder="Your full name" value={authName} onChange={(e) => setAuthName(e.target.value)} />
-                )}
-                <input className="auth-input" type="tel" placeholder="Phone number (10 digits)" value={authPhone} onChange={(e) => setAuthPhone(e.target.value)} />
-                <input className="auth-input" type="password" placeholder="Password" value={authPass} onChange={(e) => setAuthPass(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
-                <button className="btn-primary" onClick={handleAuth} disabled={authLoading}>
-                  {authLoading ? 'Please wait…' : authMode === 'login' ? 'Login' : 'Send OTP'}
+                <p style={{ fontSize: '0.85rem', color: '#8a8a9a', textAlign: 'center' }}>We'll send a one-time OTP to verify your number</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ background: '#1e1e28', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '0.85rem 1rem', color: '#f0f0f4', flexShrink: 0 }}>+91</span>
+                  <input className="auth-input" type="tel" placeholder="10-digit mobile number" value={authPhone}
+                    onChange={(e) => setAuthPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} style={{ flex: 1 }} />
+                </div>
+                <button className="btn-primary" onClick={handleAuth} disabled={authLoading || authPhone.length !== 10}>
+                  {authLoading ? 'Sending OTP…' : 'Get OTP'}
                 </button>
               </>
             )}
+
+            {authStep === 'otp' && (
+              <>
+                <p style={{ fontSize: '0.85rem', color: '#8a8a9a', textAlign: 'center' }}>OTP sent to +91 {authPhone}</p>
+                <input className="auth-input" type="number" placeholder="6-digit OTP" value={authOtp}
+                  onChange={(e) => setAuthOtp(e.target.value.slice(0, 6))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }}
+                  style={{ textAlign: 'center', fontSize: '1.4rem', letterSpacing: '0.3em' }} />
+                <button className="btn-primary" onClick={handleAuth} disabled={authLoading || authOtp.length !== 6}>
+                  {authLoading ? 'Verifying…' : 'Verify OTP'}
+                </button>
+                <button style={{ background: 'none', color: '#8a8a9a', fontSize: '0.85rem' }}
+                  onClick={() => { setAuthStep('phone'); setAuthOtp(''); setAuthError(null); }}>
+                  Change number
+                </button>
+              </>
+            )}
+
+            {authStep === 'name' && (
+              <>
+                <p style={{ fontSize: '0.85rem', color: '#8a8a9a', textAlign: 'center' }}>Looks like you're new! Tell us your name.</p>
+                <input className="auth-input" type="text" placeholder="Your full name" value={authName}
+                  onChange={(e) => setAuthName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAuth(); } }} />
+                <button className="btn-primary" onClick={handleAuth} disabled={authLoading || !authName.trim()}>
+                  {authLoading ? 'Creating account…' : 'Continue'}
+                </button>
+              </>
+            )}
+
             {authError && <p className="auth-error">{authError}</p>}
             <button style={{ background: 'none', color: '#8a8a9a', fontSize: '0.8rem', marginTop: '0.5rem' }} onClick={() => setScreen('privacy')}>Privacy Policy</button>
           </div>
