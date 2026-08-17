@@ -54,7 +54,7 @@ jobs:
 
           if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" = "None" ]; then
             echo "Creating new App Runner service..."
-            aws apprunner create-service \
+            SERVICE_ARN=$(aws apprunner create-service \
               --region $REGION \
               --service-name $SERVICE_NAME \
               --source-configuration "{
@@ -76,7 +76,9 @@ jobs:
               --instance-configuration "{
                 \"Cpu\": \"0.25 vCPU\",
                 \"Memory\": \"0.5 GB\"
-              }"
+              }" \
+              --query "Service.ServiceArn" \
+              --output text)
           else
             echo "Updating existing App Runner service $SERVICE_ARN..."
             aws apprunner update-service \
@@ -103,7 +105,7 @@ jobs:
           echo "Waiting for service to be running..."
           aws apprunner wait service-running \
             --region $REGION \
-            --service-name $SERVICE_NAME 2>/dev/null || true
+            --service-arn $SERVICE_ARN 2>/dev/null || true
 
           # Print the service URL
           aws apprunner list-services --region $REGION \
