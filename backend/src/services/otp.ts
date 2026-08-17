@@ -1,6 +1,5 @@
 import fetch from "node-fetch";
 
-// In-memory OTP store (use Redis in production)
 const otpStore = new Map<string, { otp: string; expiresAt: number }>();
 
 function generateOtp(): string {
@@ -9,32 +8,28 @@ function generateOtp(): string {
 
 export async function sendOtp(phone: string): Promise<void> {
   const otp = generateOtp();
-  otpStore.set(phone, { otp, expiresAt: Date.now() + 10 * 60 * 1000 }); // 10 min
+  otpStore.set(phone, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
 
-  const apiKey = process.env.MSG91_API_KEY;
-  const senderId = process.env.MSG91_SENDER_ID || "CABCMP";
-  const templateId = process.env.MSG91_TEMPLATE_ID;
+  const apiKey = process.env.FAST2SMS_API_KEY;
 
-  if (!apiKey || !templateId) {
-    // Dev mode: log OTP to console
+  if (!apiKey) {
     console.log(`[DEV] OTP for ${phone}: ${otp}`);
     return;
   }
 
-  const url = `https://api.msg91.com/api/v5/otp?template_id=${templateId}&mobile=91${phone}&authkey=${apiKey}&otp=${otp}&sender=${senderId}`;
-  const response = await fetch(url, { method: "GET" });
-  if (!response.ok) {
-    throw new Error(`MSG91 error: ${response.status}`);
+  const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&variables_values=${otp}&route=otp&numbers=${phone}`;
+  const res = await fetch(url, { method: "GET", headers: { "cache-control": "no-cache" } });
+  const data: any = await res.json();
+
+  if (!data.return) {
+    throw new Error(`Fast2SMS error: ${JSON.stringify(data)}`);
   }
 }
 
 export function verifyOtp(phone: string, otp: string): boolean {
   const stored = otpStore.get(phone);
   if (!stored) return false;
-  if (Date.now() > stored.expiresAt) {
-    otpStore.delete(phone);
-    return false;
-  }
+  if (Date.now() > stored.expiresAt) { otpStore.delete(phone); return false; }
   if (stored.otp !== otp) return false;
   otpStore.delete(phone);
   return true;
